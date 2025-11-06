@@ -1,6 +1,6 @@
 export interface VideoFrame {
   index: number;
-  imageData: string; // base64 або data URL
+  imageData: string; // base64 or data URL
 }
 
 export const extractFramesFromVideo = async (
@@ -13,7 +13,7 @@ export const extractFramesFromVideo = async (
     const ctx = canvas.getContext('2d');
     
     if (!ctx) {
-      reject(new Error('Не вдалося отримати контекст canvas'));
+      reject(new Error('Failed to get canvas context'));
       return;
     }
 
@@ -25,7 +25,7 @@ export const extractFramesFromVideo = async (
       canvas.height = video.videoHeight;
       
       const frames: VideoFrame[] = [];
-      const frameInterval = 1 / fps; // секунди між кадрами
+      const frameInterval = 1 / fps; // seconds between frames
       const duration = video.duration;
       let currentTime = 0;
       let frameIndex = 0;
@@ -74,12 +74,12 @@ export const loadImageAsFrame = async (imageFile: File): Promise<VideoFrame> => 
           imageData,
         });
       } else {
-        reject(new Error('Не вдалося завантажити зображення'));
+        reject(new Error('Failed to load image'));
       }
     };
     
     reader.onerror = () => {
-      reject(new Error('Помилка читання файлу зображення'));
+      reject(new Error('Error reading image file'));
     };
     
     reader.readAsDataURL(imageFile);

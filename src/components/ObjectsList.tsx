@@ -18,11 +18,11 @@ export const ObjectsList: React.FC<ObjectsListProps> = ({
   return (
     <div className="objects-list">
       <div className="objects-list-header">
-        <h3>Об'єкти ({rectangles.length})</h3>
+        <h3>Objects ({rectangles.length})</h3>
       </div>
       <div className="objects-list-content">
         {rectangles.length === 0 ? (
-          <div className="empty-message">Немає об'єктів</div>
+          <div className="empty-message">No objects</div>
         ) : (
           rectangles.map((rect, index) => (
             <div
@@ -31,7 +31,7 @@ export const ObjectsList: React.FC<ObjectsListProps> = ({
               onClick={() => onSelect(index)}
             >
               <div className="object-item-info">
-                <div className="object-item-label">Об'єкт {index + 1}</div>
+                <div className="object-item-label">Object {index + 1}</div>
                 <div className="object-item-details">
                   x: {Math.round(rect.x)}, y: {Math.round(rect.y)}
                   <br />
@@ -44,7 +44,7 @@ export const ObjectsList: React.FC<ObjectsListProps> = ({
                   e.stopPropagation();
                   onDelete(index);
                 }}
-                title="Видалити"
+                title="Delete"
               >
                 ×
               </button>
