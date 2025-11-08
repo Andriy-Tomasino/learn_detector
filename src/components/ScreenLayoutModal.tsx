@@ -2,14 +2,14 @@ import React, { useState, useRef } from 'react';
 import './ScreenLayoutModal.css';
 
 interface ScreenData {
-  videoFile: File | null;
-  jsonFile: File | null;
+  xmlFile: File | null;
+  framesFiles: File[];
 }
 
 interface ScreenLayoutModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (layout: { screens: number; screenData: ScreenData[] }) => void;
+  onSave: (layout: { screens: number; screenData: ScreenData[] }) => Promise<void> | void;
 }
 
 export const ScreenLayoutModal: React.FC<ScreenLayoutModalProps> = ({
@@ -19,17 +19,17 @@ export const ScreenLayoutModal: React.FC<ScreenLayoutModalProps> = ({
 }) => {
   const [screens, setScreens] = useState<number>(1);
   const [screenData, setScreenData] = useState<ScreenData[]>([
-    { videoFile: null, jsonFile: null },
+    { xmlFile: null, framesFiles: [] },
   ]);
-  const videoInputRefs = useRef<(HTMLInputElement | null)[]>([]);
-  const jsonInputRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const xmlInputRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const framesInputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   // Оновлюємо screenData при зміні кількості екранів
   React.useEffect(() => {
     setScreenData(prev => {
       const newScreenData: ScreenData[] = [];
       for (let i = 0; i < screens; i++) {
-        newScreenData.push(prev[i] || { videoFile: null, jsonFile: null });
+        newScreenData.push(prev[i] || { xmlFile: null, framesFiles: [] });
       }
       return newScreenData;
     });
@@ -37,28 +37,38 @@ export const ScreenLayoutModal: React.FC<ScreenLayoutModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleVideoUpload = (screenIndex: number, e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleXmlUpload = (screenIndex: number, e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       const newScreenData = [...screenData];
-      newScreenData[screenIndex] = { ...newScreenData[screenIndex], videoFile: file };
+      newScreenData[screenIndex] = { ...newScreenData[screenIndex], xmlFile: file };
       setScreenData(newScreenData);
     }
   };
 
-  const handleJsonUpload = (screenIndex: number, e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
+  const handleFramesUpload = (screenIndex: number, e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length > 0) {
       const newScreenData = [...screenData];
-      newScreenData[screenIndex] = { ...newScreenData[screenIndex], jsonFile: file };
+      newScreenData[screenIndex] = { ...newScreenData[screenIndex], framesFiles: files };
       setScreenData(newScreenData);
     }
   };
 
-  const handleSave = () => {
-    onSave({ screens, screenData });
+  const handleSave = async () => {
+    // Валідація перед збереженням
+    const hasAnyFrames = screenData.some(screen => screen.framesFiles.length > 0);
+    if (!hasAnyFrames) {
+      alert('Помилка: необхідно завантажити хоча б один фрейм для створення проєкту.');
+      return;
+    }
+
+    // Викликаємо onSave (який є асинхронним)
+    await onSave({ screens, screenData });
+    
+    // Очищаємо форму та закриваємо модальне вікно
     setScreens(1);
-    setScreenData([{ videoFile: null, jsonFile: null }]);
+    setScreenData([{ xmlFile: null, framesFiles: [] }]);
     onClose();
   };
 
@@ -121,35 +131,38 @@ export const ScreenLayoutModal: React.FC<ScreenLayoutModalProps> = ({
               <div key={index} className="screen-upload-group">
                 <h4>Screen {index + 1}</h4>
                 <div className="upload-item">
-                  <label>Video File:</label>
+                  <label>XML File:</label>
                   <input
-                    ref={(el) => (videoInputRefs.current[index] = el)}
+                    ref={(el) => (xmlInputRefs.current[index] = el)}
                     type="file"
-                    accept="video/*"
-                    onChange={(e) => handleVideoUpload(index, e)}
+                    accept=".xml,application/xml,text/xml"
+                    onChange={(e) => handleXmlUpload(index, e)}
                     style={{ display: 'none' }}
                   />
                   <button
                     className="upload-btn"
-                    onClick={() => videoInputRefs.current[index]?.click()}
+                    onClick={() => xmlInputRefs.current[index]?.click()}
                   >
-                    {screenData[index]?.videoFile ? screenData[index].videoFile.name : 'Select Video'}
+                    {screenData[index]?.xmlFile ? screenData[index].xmlFile.name : 'Select XML'}
                   </button>
                 </div>
                 <div className="upload-item">
-                  <label>JSON File:</label>
+                  <label>Frames (Images):</label>
                   <input
-                    ref={(el) => (jsonInputRefs.current[index] = el)}
+                    ref={(el) => (framesInputRefs.current[index] = el)}
                     type="file"
-                    accept=".json,application/json"
-                    onChange={(e) => handleJsonUpload(index, e)}
+                    accept="image/*"
+                    multiple
+                    onChange={(e) => handleFramesUpload(index, e)}
                     style={{ display: 'none' }}
                   />
                   <button
                     className="upload-btn"
-                    onClick={() => jsonInputRefs.current[index]?.click()}
+                    onClick={() => framesInputRefs.current[index]?.click()}
                   >
-                    {screenData[index]?.jsonFile ? screenData[index].jsonFile.name : 'Select JSON'}
+                    {screenData[index]?.framesFiles.length > 0 
+                      ? `${screenData[index].framesFiles.length} frame(s) selected`
+                      : 'Select Frames'}
                   </button>
                 </div>
               </div>

@@ -65,17 +65,17 @@
 
 .project-list {
   flex: 1;
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: 20px;
-  display: flex;
-  flex-direction: row;
-  gap: 16px;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 20px;
+  align-items: start;
 }
 
 .project-list::-webkit-scrollbar {
-  height: 8px;
+  width: 8px;
 }
 
 .project-list::-webkit-scrollbar-track {
@@ -117,16 +117,14 @@
   cursor: pointer;
   transition: all 0.3s ease;
   backdrop-filter: blur(10px);
-  min-width: 320px;
-  max-width: 320px;
-  flex-shrink: 0;
+  width: 100%;
 }
 
 .project-card:hover {
   background: rgba(255, 255, 255, 0.1);
   border-color: rgba(74, 144, 226, 0.5);
-  transform: translateX(4px) translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  transform: translateY(-4px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
 }
 
 .project-card.selected {

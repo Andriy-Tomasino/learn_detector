@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { FrameViewer } from './FrameViewer';
 import { ObjectsList } from './ObjectsList';
-import { DetectionPanel } from './DetectionPanel';
 import {
   saveCurrentTask,
   loadCurrentTask,
@@ -18,6 +17,7 @@ import {
   getProjectFile,
 } from '../utils/database';
 import { extractFramesFromVideo, loadImageAsFrame, type VideoFrame } from '../utils/videoUtils';
+import { parseXmlAnnotations, type ParsedAnnotation } from '../utils/xmlParser';
 
 type CreationMode = 'drag' | '2points' | '4points';
 
@@ -36,26 +36,59 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
   const [currentVideoInfo, setCurrentVideoInfo] = useState<{ fileName: string; fileSize: number; fileType: string } | null>(null);
   const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
   const [isDetecting, setIsDetecting] = useState(false);
-  const [screenLayout, setScreenLayout] = useState<{ screens: number } | null>(null);
-  const [detections, setDetections] = useState<Array<{ screenNumber: number; numberOnScreen: number; id: string; status?: 'focused' | 'reject' | null }>>([
-    // Приклад даних для тестування
-    { screenNumber: 1, numberOnScreen: 1, id: 'det_001', status: null },
-    { screenNumber: 1, numberOnScreen: 2, id: 'det_002', status: null },
-    { screenNumber: 2, numberOnScreen: 1, id: 'det_003', status: null },
-    { screenNumber: 2, numberOnScreen: 2, id: 'det_004', status: null },
-  ]);
+  const [screenLayout, setScreenLayout] = useState<{ screens: number; screenData?: any[] } | null>(null);
+  const [xmlAnnotations, setXmlAnnotations] = useState<{ [screenNumber: number]: ParsedAnnotation }>({});
+  const [isPlaying, setIsPlaying] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const playIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Завантаження розмітки екранів
+  // Завантаження розмітки екранів, XML та фреймів
   useEffect(() => {
-    const layoutData = localStorage.getItem('screenLayout');
-    if (layoutData) {
-      try {
-        const layout = JSON.parse(layoutData);
-        setScreenLayout({ screens: layout.screens });
-      } catch (error) {
-        console.error('Error loading screen layout:', error);
+    const loadScreenData = async () => {
+      const layoutData = localStorage.getItem('screenLayout');
+      if (layoutData) {
+        try {
+          const layout = JSON.parse(layoutData);
+          setScreenLayout(layout);
+
+          // Завантажуємо XML та фрейми для кожного екрана
+          const annotations: { [screenNumber: number]: ParsedAnnotation } = {};
+          const loadedFrames: VideoFrame[] = [];
+          let frameIndex = 0;
+
+          for (let i = 0; i < layout.screens; i++) {
+            const screenNumber = i + 1;
+            const screenKey = `screen_${screenNumber}`;
+
+            // Завантажуємо XML
+            const xmlData = localStorage.getItem(`${screenKey}_xml`);
+            if (xmlData) {
+              try {
+                const parsed = await parseXmlAnnotations(xmlData);
+                annotations[screenNumber] = parsed;
+              } catch (error) {
+                console.error(`Error parsing XML for screen ${screenNumber}:`, error);
+              }
+            }
+
+            // Фрейми тепер зберігаються в проєкті в IndexedDB, а не в localStorage
+            // Завантажуємо тільки кількість для відображення інформації
+            const framesCount = parseInt(localStorage.getItem(`${screenKey}_frames_count`) || '0');
+            // Фрейми будуть завантажені з проєкту, якщо він відкритий
+          }
+
+          setXmlAnnotations(annotations);
+          if (loadedFrames.length > 0) {
+            setFrames(loadedFrames);
+            setCurrentFrameIndex(0);
+          }
+        } catch (error) {
+          console.error('Error loading screen layout:', error);
+        }
       }
-    }
+    };
+
+    loadScreenData();
   }, []);
 
   // Завантаження проекту для редагування
@@ -68,10 +101,134 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
           fileSize: projectToEdit.fileSize,
           fileType: projectToEdit.fileType,
         });
-        setAnnotations(projectToEdit.annotations);
+        // Завантажуємо screenLayout та XML анотації з localStorage
+        const layoutData = localStorage.getItem('screenLayout');
+        let finalAnnotations = projectToEdit.annotations || { frames: {} };
+        
+        if (layoutData) {
+          try {
+            const layout = JSON.parse(layoutData);
+            setScreenLayout(layout);
+            
+            // Завантажуємо XML анотації для кожного екрана
+            const xmlAnnotationsData: { [screenNumber: number]: ParsedAnnotation } = {};
+            for (let i = 0; i < layout.screens; i++) {
+              const screenNumber = i + 1;
+              const screenKey = `screen_${screenNumber}`;
+              const xmlData = localStorage.getItem(`${screenKey}_xml`);
+              if (xmlData) {
+                try {
+                  const parsed = await parseXmlAnnotations(xmlData);
+                  xmlAnnotationsData[screenNumber] = parsed;
+                  console.log(`Завантажено XML анотації для екрана ${screenNumber}:`, parsed);
+                } catch (error) {
+                  console.error(`Помилка парсингу XML для екрана ${screenNumber}:`, error);
+                }
+              }
+            }
+            setXmlAnnotations(xmlAnnotationsData);
+            console.log('XML анотації завантажено:', xmlAnnotationsData);
+            
+            // Конвертуємо XML анотації в формат annotations для відображення в ObjectsList
+            const convertedAnnotations: { frames: { [key: string]: Rectangle[] } } = { frames: {} };
+            
+            // Об'єднуємо анотації з проєкту та XML
+            const baseAnnotations = projectToEdit.annotations || { frames: {} };
+            
+            // Конвертуємо XML анотації для кожного екрана
+            Object.entries(xmlAnnotationsData).forEach(([screenNumStr, xmlAnnotation]) => {
+              const screenNumber = parseInt(screenNumStr);
+              
+              // Визначаємо початковий індекс фреймів для цього екрана
+              let startFrameIndex = 0;
+              if (screenNumber > 1) {
+                for (let i = 1; i < screenNumber; i++) {
+                  const screenKey = `screen_${i}`;
+                  const framesCount = parseInt(localStorage.getItem(`${screenKey}_frames_count`) || '0');
+                  startFrameIndex += framesCount;
+                }
+              }
+              
+              // Знаходимо offset (мінімальний індекс фрейму в XML)
+              const xmlFrameKeys = Object.keys(xmlAnnotation.frames);
+              const numericXmlKeys = xmlFrameKeys.map(k => parseInt(k)).filter(k => !isNaN(k)).sort((a, b) => a - b);
+              const frameOffset = numericXmlKeys.length > 0 ? numericXmlKeys[0] : 0;
+              
+              console.log(`Екран ${screenNumber}: XML frame offset = ${frameOffset}, startFrameIndex = ${startFrameIndex}`);
+              
+              // Конвертуємо XML бокси в Rectangle формат
+              Object.entries(xmlAnnotation.frames).forEach(([frameKey, boxes]) => {
+                const xmlFrameIndex = parseInt(frameKey);
+                // Віднімаємо offset, щоб отримати локальний індекс (0-based)
+                const localFrameIndex = xmlFrameIndex - frameOffset;
+                const globalFrameIndex = startFrameIndex + localFrameIndex;
+                const frameKeyStr = globalFrameIndex.toString();
+                
+                console.log(`Конвертація: екран ${screenNumber}, XML індекс ${xmlFrameIndex}, локальний ${localFrameIndex}, глобальний ${globalFrameIndex}, боксів: ${(boxes as any[]).length}`);
+                
+                // Конвертуємо BoundingBox в Rectangle
+                const rectangles: Rectangle[] = (boxes as any[]).map((box: any) => ({
+                  x: box.x,
+                  y: box.y,
+                  w: box.width,
+                  h: box.height,
+                }));
+                
+                console.log(`Створено ${rectangles.length} rectangles для фрейму ${frameKeyStr}:`, rectangles.slice(0, 2));
+                
+                // Об'єднуємо з існуючими анотаціями
+                if (convertedAnnotations.frames[frameKeyStr]) {
+                  convertedAnnotations.frames[frameKeyStr] = [
+                    ...convertedAnnotations.frames[frameKeyStr],
+                    ...rectangles
+                  ];
+                } else {
+                  convertedAnnotations.frames[frameKeyStr] = rectangles;
+                }
+              });
+            });
+            
+            // Об'єднуємо з базовими анотаціями з проєкту
+            Object.entries(baseAnnotations.frames).forEach(([frameKey, rects]) => {
+              if (convertedAnnotations.frames[frameKey]) {
+                convertedAnnotations.frames[frameKey] = [
+                  ...convertedAnnotations.frames[frameKey],
+                  ...rects
+                ];
+              } else {
+                convertedAnnotations.frames[frameKey] = rects;
+              }
+            });
+            
+            finalAnnotations = convertedAnnotations;
+            console.log('Конвертовано XML анотації в annotations:', convertedAnnotations);
+            console.log('Приклад анотацій для перших фреймів:', {
+              frame0: convertedAnnotations.frames['0'],
+              frame1: convertedAnnotations.frames['1'],
+              frame2: convertedAnnotations.frames['2'],
+              frame3: convertedAnnotations.frames['3'],
+              allFrameKeys: Object.keys(convertedAnnotations.frames).slice(0, 20),
+              totalFramesWithAnnotations: Object.keys(convertedAnnotations.frames).length
+            });
+            
+            // Перевіряємо, чи є анотації для фрейму 3
+            if (convertedAnnotations.frames['3']) {
+              console.log('✅ Анотації для фрейму 3 знайдено:', convertedAnnotations.frames['3']);
+            } else {
+              console.warn('❌ Анотації для фрейму 3 НЕ знайдено!');
+              console.log('Доступні ключі:', Object.keys(convertedAnnotations.frames));
+            }
+          } catch (error) {
+            console.error('Помилка завантаження layout:', error);
+          }
+        }
+        
+        // Встановлюємо фінальні анотації (з XML або без)
+        setAnnotations(finalAnnotations);
 
         // Відновлюємо фрейми з проекту (якщо вони збережені)
         if (projectToEdit.frames && projectToEdit.frames.length > 0) {
+          console.log(`Завантаження ${projectToEdit.frames.length} фреймів з проєкту`);
           const restoredFrames: VideoFrame[] = projectToEdit.frames.map((imageData, index) => ({
             index,
             imageData,
@@ -316,12 +473,73 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
 
   const currentFrame = frames[currentFrameIndex];
   const currentRectangles = annotations.frames[currentFrameIndex.toString()] || [];
+  
+  // Логування для діагностики
+  useEffect(() => {
+    if (currentFrameIndex >= 0 && frames.length > 0) {
+      const frameKey = currentFrameIndex.toString();
+      const frameAnnotations = annotations.frames[frameKey];
+      console.log(`=== ДІАГНОСТИКА ФРЕЙМУ ${currentFrameIndex} ===`);
+      console.log(`Frame key: "${frameKey}"`);
+      console.log(`Rectangles для цього фрейму:`, frameAnnotations);
+      console.log(`Кількість rectangles:`, frameAnnotations?.length || 0);
+      console.log(`Всі доступні frame keys в annotations:`, Object.keys(annotations.frames));
+      console.log(`Перші 5 frame keys з даними:`, Object.keys(annotations.frames).slice(0, 5).map(key => ({
+        key,
+        count: annotations.frames[key]?.length || 0
+      })));
+      console.log(`Всього frames з анотаціями:`, Object.keys(annotations.frames).length);
+    }
+  }, [currentFrameIndex, annotations, frames.length]);
 
-  const handleStatusChange = (id: string, status: 'focused' | 'reject' | null) => {
-    setDetections(prev => 
-      prev.map(det => det.id === id ? { ...det, status } : det)
-    );
+  // Управління відтворенням фреймів
+  const handlePlay = () => {
+    if (frames.length === 0) return;
+    
+    setIsPlaying(true);
+    playIntervalRef.current = setInterval(() => {
+      setCurrentFrameIndex((prev) => {
+        if (prev >= frames.length - 1) {
+          setIsPlaying(false);
+          if (playIntervalRef.current) {
+            clearInterval(playIntervalRef.current);
+            playIntervalRef.current = null;
+          }
+          return prev;
+        }
+        return prev + 1;
+      });
+    }, 200); // 200ms між фреймами (5 FPS)
   };
+
+  const handleStop = () => {
+    setIsPlaying(false);
+    if (playIntervalRef.current) {
+      clearInterval(playIntervalRef.current);
+      playIntervalRef.current = null;
+    }
+  };
+
+  const handlePreviousFrame = () => {
+    if (currentFrameIndex > 0) {
+      setCurrentFrameIndex(currentFrameIndex - 1);
+    }
+  };
+
+  const handleNextFrame = () => {
+    if (currentFrameIndex < frames.length - 1) {
+      setCurrentFrameIndex(currentFrameIndex + 1);
+    }
+  };
+
+  // Очищення інтервалу при розмонтуванні
+  useEffect(() => {
+    return () => {
+      if (playIntervalRef.current) {
+        clearInterval(playIntervalRef.current);
+      }
+    };
+  }, []);
 
   return (
     <div className="task-page">
@@ -369,10 +587,108 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
               onRectSelect={setSelectedRectIndex}
               isDetecting={isDetecting}
               screenLayout={screenLayout}
+              xmlAnnotations={xmlAnnotations}
+              currentScreenNumber={1}
             />
           ) : (
             <div style={{ color: '#fff', textAlign: 'center' }}>
               Upload video or photo to get started
+            </div>
+          )}
+          
+          {/* Кнопки управління плейером */}
+          {currentFrame && frames.length > 0 && (
+            <div style={{
+              position: 'absolute',
+              bottom: '20px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              display: 'flex',
+              gap: '10px',
+              alignItems: 'center',
+              backgroundColor: 'rgba(0, 0, 0, 0.7)',
+              padding: '10px 20px',
+              borderRadius: '8px',
+              zIndex: 10,
+            }}>
+              <button
+                onClick={handlePreviousFrame}
+                disabled={currentFrameIndex === 0}
+                style={{
+                  padding: '8px 16px',
+                  border: 'none',
+                  borderRadius: '6px',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  cursor: currentFrameIndex === 0 ? 'not-allowed' : 'pointer',
+                  backgroundColor: currentFrameIndex === 0 ? '#666' : '#2196f3',
+                  color: '#ffffff',
+                  opacity: currentFrameIndex === 0 ? 0.5 : 1,
+                }}
+              >
+                ◀ Попередній
+              </button>
+              
+              {!isPlaying ? (
+                <button
+                  onClick={handlePlay}
+                  style={{
+                    padding: '8px 16px',
+                    border: 'none',
+                    borderRadius: '6px',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                    backgroundColor: '#4caf50',
+                    color: '#ffffff',
+                  }}
+                >
+                  ▶ Відтворити
+                </button>
+              ) : (
+                <button
+                  onClick={handleStop}
+                  style={{
+                    padding: '8px 16px',
+                    border: 'none',
+                    borderRadius: '6px',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                    backgroundColor: '#f44336',
+                    color: '#ffffff',
+                  }}
+                >
+                  ⏹ Стоп
+                </button>
+              )}
+              
+              <button
+                onClick={handleNextFrame}
+                disabled={currentFrameIndex >= frames.length - 1}
+                style={{
+                  padding: '8px 16px',
+                  border: 'none',
+                  borderRadius: '6px',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  cursor: currentFrameIndex >= frames.length - 1 ? 'not-allowed' : 'pointer',
+                  backgroundColor: currentFrameIndex >= frames.length - 1 ? '#666' : '#2196f3',
+                  color: '#ffffff',
+                  opacity: currentFrameIndex >= frames.length - 1 ? 0.5 : 1,
+                }}
+              >
+                Наступний ▶
+              </button>
+              
+              <div style={{
+                marginLeft: '15px',
+                color: '#ffffff',
+                fontSize: '14px',
+                fontWeight: '500',
+              }}>
+                {currentFrameIndex + 1} / {frames.length}
+              </div>
             </div>
           )}
         </div>
@@ -385,9 +701,12 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
           />
         )}
       </div>
-      <DetectionPanel
-        detections={detections}
-        onStatusChange={handleStatusChange}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="video/*,image/*"
+        onChange={handleFileUpload}
+        style={{ display: 'none' }}
       />
     </div>
   );
