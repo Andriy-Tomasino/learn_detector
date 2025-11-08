@@ -54,37 +54,43 @@ export const FrameViewer: React.FC<FrameViewerProps> = ({
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, 0, 0);
       imageRef.current = img;
-      drawRectangles(ctx, rectangles);
+      
+      // Малюємо rectangles одразу після завантаження зображення, щоб уникнути затримки
+      if (!isDetecting) {
+        drawRectangles(ctx, rectangles);
+        // Малюємо XML розмітку, якщо rectangles порожні
+        if (xmlAnnotations && screenLayout && rectangles.length === 0) {
+          drawXmlBoundingBoxes(ctx, canvas.width, canvas.height);
+        }
+      }
     };
     img.src = frameImage;
-  }, [frameImage, rectangles]);
+  }, [frameImage, rectangles, isDetecting, screenLayout, xmlAnnotations, frameIndex]);
 
   const drawXmlBoundingBoxes = (ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number) => {
     if (!xmlAnnotations || !screenLayout) {
-      console.log('drawXmlBoundingBoxes пропущено - немає xmlAnnotations або screenLayout');
       return;
     }
     
-    console.log(`drawXmlBoundingBoxes для фрейму ${frameIndex}:`, {
-      xmlAnnotationsKeys: Object.keys(xmlAnnotations),
-      screenLayout
-    });
+    // Якщо rectangles вже є для цього фрейму, не малюємо XML бокси
+    // (rectangles вже містять всю необхідну інформацію)
+    if (rectangles.length > 0) {
+      return;
+    }
 
     // Визначаємо номер екрана на основі позиції фрейму
     const screens = screenLayout.screens;
     let screenNum = currentScreenNumber;
+    let boxes: any[] = [];
     
     // Якщо кілька екранів, визначаємо екран на основі індексу фрейму
     if (screens > 1) {
       // Розраховуємо кількість фреймів на екран
-      // Спочатку знаходимо загальну кількість фреймів для кожного екрана
       const framesPerScreen: number[] = [];
-      let totalFramesCount = 0;
       for (let i = 1; i <= screens; i++) {
         const screenKey = `screen_${i}`;
         const framesCount = parseInt(localStorage.getItem(`${screenKey}_frames_count`) || '0');
         framesPerScreen.push(framesCount);
-        totalFramesCount += framesCount;
       }
       
       // Визначаємо, до якого екрана належить поточний фрейм
@@ -111,8 +117,7 @@ export const FrameViewer: React.FC<FrameViewerProps> = ({
       if (!annotation) return;
 
       // Шукаємо бокси для локального індексу фрейму в межах екрана
-      // Спробуємо знайти за локальним індексом
-      let boxes = annotation.frames[localFrameIndex.toString()] || [];
+      boxes = annotation.frames[localFrameIndex.toString()] || [];
       
       // Якщо не знайдено, спробуємо знайти за глобальним індексом
       if (boxes.length === 0) {
@@ -123,52 +128,18 @@ export const FrameViewer: React.FC<FrameViewerProps> = ({
       if (boxes.length === 0) {
         const frameKeys = Object.keys(annotation.frames).map(k => parseInt(k)).sort((a, b) => a - b);
         if (frameKeys.length > 0) {
-          // Знаходимо найближчий фрейм
           const closestFrame = frameKeys.reduce((prev, curr) => 
             Math.abs(curr - localFrameIndex) < Math.abs(prev - localFrameIndex) ? curr : prev
           );
-          // Використовуємо бокси тільки якщо різниця невелика (в межах 5 фреймів)
           if (Math.abs(closestFrame - localFrameIndex) <= 5) {
             boxes = annotation.frames[closestFrame.toString()] || [];
           }
         }
       }
-      
-      if (boxes.length > 0) {
-        console.log(`Знайдено ${boxes.length} боксів для фрейму ${frameIndex} (екран ${screenNum}, локальний ${localFrameIndex})`);
-      }
-      
-      boxes.forEach((box: any, index: number) => {
-        // Перевіряємо, чи координати в межах canvas
-        if (box.x < 0 || box.y < 0 || box.width <= 0 || box.height <= 0) {
-          console.warn(`Невірні координати боксу ${index}:`, box);
-          return;
-        }
-        
-        ctx.strokeStyle = '#00ff00';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(box.x, box.y, box.width, box.height);
-
-        // Малюємо текст з інформацією
-        if (box.class) {
-          ctx.fillStyle = '#00ff00';
-          ctx.font = '14px Arial';
-          ctx.fillText(
-            box.class,
-            box.x,
-            box.y > 20 ? box.y - 5 : box.y + 20
-          );
-        }
-      });
-      
-      if (boxes.length > 0) {
-        console.log(`Намальовано ${boxes.length} боксів для фрейму ${frameIndex} (екран ${screenNum})`);
-      }
     } else {
       // Один екран - використовуємо frameIndex напряму
       const annotation = xmlAnnotations[1];
       if (!annotation) {
-        console.log(`Немає XML анотації для екрана 1, фрейм ${frameIndex}`);
         return;
       }
       
@@ -178,18 +149,9 @@ export const FrameViewer: React.FC<FrameViewerProps> = ({
       // Знаходимо offset (мінімальний індекс фрейму в XML)
       const frameOffset = numericFrameKeys.length > 0 ? numericFrameKeys[0] : 0;
       const adjustedFrameIndex = frameIndex + frameOffset;
-      
-      console.log(`XML анотація для екрана 1:`, {
-        frameKeys: frameKeys.slice(0, 10),
-        totalFrames: frameKeys.length,
-        frameOffset,
-        lookingForFrame: frameIndex,
-        adjustedFrameIndex
-      });
 
       // Шукаємо бокси для поточного фрейму з урахуванням offset
-      let boxes = annotation.frames[adjustedFrameIndex.toString()] || [];
-      console.log(`Пошук боксів для фрейму ${frameIndex} (з offset ${frameOffset} = ${adjustedFrameIndex}): знайдено ${boxes.length} боксів`);
+      boxes = annotation.frames[adjustedFrameIndex.toString()] || [];
       
       // Якщо не знайдено, спробуємо знайти найближчий фрейм
       if (boxes.length === 0 && numericFrameKeys.length > 0) {
@@ -197,88 +159,122 @@ export const FrameViewer: React.FC<FrameViewerProps> = ({
           Math.abs(curr - adjustedFrameIndex) < Math.abs(prev - adjustedFrameIndex) ? curr : prev
         );
         const diff = Math.abs(closestFrame - adjustedFrameIndex);
-        console.log(`Найближчий фрейм: ${closestFrame}, різниця: ${diff}`);
         
         // Використовуємо бокси якщо різниця невелика (в межах 10 фреймів)
         if (diff <= 10) {
           boxes = annotation.frames[closestFrame.toString()] || [];
-          console.log(`Використовуємо бокси з найближчого фрейму ${closestFrame}: ${boxes.length} боксів`);
-        } else {
-          console.log(`Різниця занадто велика (${diff}), не використовуємо бокси`);
         }
       }
-      
-      if (boxes.length > 0) {
-        console.log(`✅ Знайдено ${boxes.length} боксів для фрейму ${frameIndex} (екран 1)`);
-        console.log(`Перший бокси:`, boxes[0]);
-      } else {
-        console.log(`❌ Бокси не знайдено для фрейму ${frameIndex}`);
-      }
-      
-      boxes.forEach((box: any, index: number) => {
-        // Перевіряємо, чи координати в межах canvas
-        if (box.x < 0 || box.y < 0 || box.width <= 0 || box.height <= 0) {
-          console.warn(`Невірні координати боксу ${index}:`, box);
-          return;
-        }
-        
-        // Перевіряємо, чи координати не виходять за межі canvas
-        if (box.x > canvasWidth || box.y > canvasHeight) {
-          console.warn(`Бокс ${index} виходить за межі canvas:`, box, `canvas: ${canvasWidth}x${canvasHeight}`);
-          return;
-        }
-        
-        console.log(`Малюю бокси ${index}: x=${box.x}, y=${box.y}, w=${box.width}, h=${box.height}`);
-        
-        ctx.strokeStyle = '#00ff00';
-        ctx.lineWidth = 3; // Збільшуємо товщину для кращої видимості
-        ctx.strokeRect(box.x, box.y, box.width, box.height);
-
-        // Малюємо текст з інформацією
-        if (box.class) {
-          ctx.fillStyle = '#00ff00';
-          ctx.font = '14px Arial';
-          ctx.fillText(
-            box.class,
-            box.x,
-            box.y > 20 ? box.y - 5 : box.y + 20
-          );
-        }
-      });
-      
-      if (boxes.length > 0) {
-        console.log(`✅ Намальовано ${boxes.length} боксів для фрейму ${frameIndex} (екран 1)`);
-      } else {
-        console.log(`❌ Бокси не намальовано для фрейму ${frameIndex}`);
-      }
-    }
-  };
-
-  const drawRectangles = (ctx: CanvasRenderingContext2D, rects: Rectangle[]) => {
-    if (rects.length > 0) {
-      console.log(`Малювання ${rects.length} rectangles:`, rects);
     }
     
-    rects.forEach((rect, index) => {
-      const isSelected = selectedRectIndex === index;
-      
-      // Перевіряємо координати
-      if (rect.x < 0 || rect.y < 0 || rect.w <= 0 || rect.h <= 0) {
-        console.warn(`Невірні координати rectangle ${index}:`, rect);
+    // Малюємо бокси з урахуванням статусу відповідних rectangles
+    boxes.forEach((box: any, index: number) => {
+      // Перевіряємо, чи координати в межах canvas
+      if (box.x < 0 || box.y < 0 || box.width <= 0 || box.height <= 0) {
         return;
       }
       
-      ctx.strokeStyle = isSelected ? '#007bff' : '#00ff00';
-      ctx.lineWidth = isSelected ? 3 : 2;
+      // Перевіряємо, чи координати не виходять за межі canvas
+      if (box.x > canvasWidth || box.y > canvasHeight) {
+        return;
+      }
+      
+      // Шукаємо відповідний rectangle за координатами (з невеликою толерантністю)
+      let status: 'attack' | 'reject' | 'hold' | null = null;
+      const tolerance = 5; // Допустима різниця в координатах
+      
+      for (const rect of rectangles) {
+        if (Math.abs(rect.x - box.x) <= tolerance &&
+            Math.abs(rect.y - box.y) <= tolerance &&
+            Math.abs(rect.w - box.width) <= tolerance &&
+            Math.abs(rect.h - box.height) <= tolerance) {
+          status = rect.status || null;
+          break;
+        }
+      }
+      
+      // Якщо не знайдено за координатами, спробуємо за індексом
+      if (status === null && rectangles[index]) {
+        status = rectangles[index].status || null;
+      }
+      
+      // Визначаємо колір та стиль залежно від статусу
+      let strokeColor = '#00ff00'; // Стандартний зелений
+      let lineWidth = 2;
+      
+      if (status === 'attack') {
+        strokeColor = '#ff0000'; // Червоний для attack
+        lineWidth = 3;
+      } else if (status === 'reject') {
+        // Не малюємо reject об'єкти
+        return;
+      }
+      
+      ctx.strokeStyle = strokeColor;
+      ctx.lineWidth = lineWidth;
+      ctx.strokeRect(box.x, box.y, box.width, box.height);
+      
+      // Малюємо перехрестя для attack
+      if (status === 'attack') {
+        ctx.strokeStyle = '#ff0000';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(box.x, box.y);
+        ctx.lineTo(box.x + box.width, box.y + box.height);
+        ctx.moveTo(box.x + box.width, box.y);
+        ctx.lineTo(box.x, box.y + box.height);
+        ctx.stroke();
+      }
+    });
+  };
+
+  const drawRectangles = (ctx: CanvasRenderingContext2D, rects: Rectangle[]) => {
+    rects.forEach((rect, index) => {
+      const isSelected = selectedRectIndex === index;
+      const status = rect.status || 'hold';
+      
+      // Якщо статус reject - не малюємо
+      if (status === 'reject') {
+        return;
+      }
+      
+      // Перевіряємо координати
+      if (rect.x < 0 || rect.y < 0 || rect.w <= 0 || rect.h <= 0) {
+        return;
+      }
+      
+      // Визначаємо колір та стиль залежно від статусу
+      // Статус attack має пріоритет над вибором
+      let strokeColor = '#00ff00'; // Стандартний зелений
+      let lineWidth = 2;
+      
+      if (status === 'attack') {
+        // Для attack завжди червоний колір, незалежно від вибору
+        strokeColor = '#ff0000';
+        lineWidth = 3;
+      }
+      // Для hold завжди зелений, навіть якщо вибраний (без синьої рамки)
+      
+      ctx.strokeStyle = strokeColor;
+      ctx.lineWidth = lineWidth;
       ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
 
-      // Малюємо ручки для зміни розміру
-      const handleSize = 8;
-      ctx.fillStyle = isSelected ? '#007bff' : '#00ff00';
-      ctx.fillRect(rect.x - handleSize / 2, rect.y - handleSize / 2, handleSize, handleSize);
-      ctx.fillRect(rect.x + rect.w - handleSize / 2, rect.y - handleSize / 2, handleSize, handleSize);
-      ctx.fillRect(rect.x - handleSize / 2, rect.y + rect.h - handleSize / 2, handleSize, handleSize);
-      ctx.fillRect(rect.x + rect.w - handleSize / 2, rect.y + rect.h - handleSize / 2, handleSize, handleSize);
+      // Малюємо перехрестя для attack (завжди червоним)
+      if (status === 'attack') {
+        ctx.strokeStyle = '#ff0000';
+        ctx.lineWidth = 2;
+        // Діагональні лінії
+        ctx.beginPath();
+        ctx.moveTo(rect.x, rect.y);
+        ctx.lineTo(rect.x + rect.w, rect.y + rect.h);
+        ctx.moveTo(rect.x + rect.w, rect.y);
+        ctx.lineTo(rect.x, rect.y + rect.h);
+        ctx.stroke();
+      }
+
+      // Ручки для зміни розміру не малюються для hold та attack
+      // Hold - режим відкату, не дозволяє змінювати об'єкт
+      // Attack - режим атаки, не дозволяє змінювати об'єкт
     });
   };
 
@@ -378,28 +374,31 @@ export const FrameViewer: React.FC<FrameViewerProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx || !imageRef.current) return;
 
+    // Малюємо безпосередньо для миттєвого відображення
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(imageRef.current, 0, 0);
     
-    console.log(`Малювання фрейму ${frameIndex}:`, {
-      rectanglesCount: rectangles.length,
-      hasXmlAnnotations: !!xmlAnnotations,
-      hasScreenLayout: !!screenLayout,
-      canvasSize: `${canvas.width}x${canvas.height}`
-    });
+    // Малюємо XML розмітку спочатку (якщо вона є)
+    // Тільки коли isDetecting = false (приховуємо при натисканні Detecting)
+    if (xmlAnnotations && screenLayout && !isDetecting) {
+      drawXmlBoundingBoxes(ctx, canvas.width, canvas.height);
+    }
     
-    drawRectangles(ctx, rectangles);
+    // Малюємо rectangles поверх XML боксів (щоб вони завжди були видимі та мали пріоритет)
+    // Тільки коли isDetecting = false (приховуємо при натисканні Detecting)
+    if (!isDetecting) {
+      drawRectangles(ctx, rectangles);
+    }
     if (points.length > 0 || hoverPoint) {
       drawPoints(ctx, points, hoverPoint);
     }
-    // Малюємо XML розмітку, якщо вона є (незалежно від isDetecting)
-    if (xmlAnnotations && screenLayout) {
-      if (isDetecting) {
-        drawScreenLayout(ctx, canvas.width, canvas.height);
-      }
-      drawXmlBoundingBoxes(ctx, canvas.width, canvas.height);
+    // Малюємо розділення екранів тільки коли isDetecting = true
+    if (isDetecting && screenLayout) {
+      drawScreenLayout(ctx, canvas.width, canvas.height);
+      // Переконуємося, що після drawScreenLayout лінії не пунктирні
+      ctx.setLineDash([]);
     }
-  }, [rectangles, points, hoverPoint, selectedRectIndex, isDetecting, screenLayout, xmlAnnotations, frameIndex, totalFrames, currentScreenNumber]);
+  }, [rectangles, points, hoverPoint, selectedRectIndex, isDetecting, screenLayout, xmlAnnotations, frameIndex, totalFrames, currentScreenNumber, frameImage]);
 
   // Слухаємо події від RectangleTool
   useEffect(() => {

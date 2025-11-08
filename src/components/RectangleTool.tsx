@@ -183,7 +183,9 @@ export const RectangleTool: React.FC<RectangleToolProps> = ({
           // Створюємо прямокутник
           const newRect = createRectFromPoints(newPoints);
           if (newRect && newRect.w > 10 && newRect.h > 10) {
-            onRectanglesChange([...rectangles, newRect]);
+            // Новий прямокутник завжди має статус hold за замовчуванням
+            const rectWithStatus = { ...newRect, status: 'hold' as const };
+            onRectanglesChange([...rectangles, rectWithStatus]);
             // Автоматично переходимо в режим drag після створення
             if (onCreationModeChange) {
               onCreationModeChange('drag');
@@ -201,11 +203,16 @@ export const RectangleTool: React.FC<RectangleToolProps> = ({
       if (creationMode !== 'drag') return;
 
       // Перевірка чи клікнули на ручку зміни розміру
+      // Не дозволяємо змінювати розмір для об'єктів зі статусом hold або attack
       let clickedRectIndex: number | null = null;
       let handle: ResizeHandle = null;
 
       for (let i = rectangles.length - 1; i >= 0; i--) {
         const rect = rectangles[i];
+        const status = rect.status || 'hold';
+        // Не дозволяємо змінювати розмір для hold та attack
+        if (status === 'hold' || status === 'attack') continue;
+        
         handle = getResizeHandle(rect, coords.x, coords.y);
         if (handle) {
           clickedRectIndex = i;
@@ -222,9 +229,14 @@ export const RectangleTool: React.FC<RectangleToolProps> = ({
       }
 
       // Перевірка чи клікнули на лінію (сторону) прямокутника для переміщення
+      // Не дозволяємо переміщувати об'єкти зі статусом hold або attack
       clickedRectIndex = null;
       for (let i = rectangles.length - 1; i >= 0; i--) {
         const rect = rectangles[i];
+        const status = rect.status || 'hold';
+        // Не дозволяємо переміщувати для hold та attack
+        if (status === 'hold' || status === 'attack') continue;
+        
         // Перевіряємо чи на лінії, але не на куті
         if (isPointOnRectangleEdge(coords.x, coords.y, rect) && !getResizeHandle(rect, coords.x, coords.y)) {
           clickedRectIndex = i;
@@ -314,6 +326,7 @@ export const RectangleTool: React.FC<RectangleToolProps> = ({
 
       if (dragMode === 'move' && selectedRectIndex !== null && dragOffset) {
         const newRects = [...rectangles];
+        // Зберігаємо статус при переміщенні
         newRects[selectedRectIndex] = {
           ...newRects[selectedRectIndex],
           x: coords.x - dragOffset.x,
@@ -323,6 +336,7 @@ export const RectangleTool: React.FC<RectangleToolProps> = ({
       } else if (dragMode === 'resize' && selectedRectIndex !== null && resizeHandle) {
         const newRects = [...rectangles];
         const rect = newRects[selectedRectIndex];
+        // Зберігаємо статус при зміні розміру
         let newRect: Rectangle = { ...rect };
 
         switch (resizeHandle) {
@@ -362,7 +376,11 @@ export const RectangleTool: React.FC<RectangleToolProps> = ({
 
         // Перевірка мінімального розміру
         if (newRect.w > 10 && newRect.h > 10) {
-          newRects[selectedRectIndex] = newRect;
+          // Зберігаємо статус при зміні розміру
+          newRects[selectedRectIndex] = {
+            ...newRect,
+            status: rect.status, // Зберігаємо статус
+          };
           onRectanglesChange(newRects);
         }
       }

@@ -54,8 +54,7 @@
 
 .object-item {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
   padding: 12px;
   margin-bottom: 8px;
   background: rgba(255, 255, 255, 0.05);
@@ -80,7 +79,8 @@
 }
 
 .object-item-info {
-  flex: 1;
+  width: 100%;
+  margin-bottom: 8px;
 }
 
 .object-item-label {
@@ -106,32 +106,57 @@
   color: #b0d0ff;
 }
 
-.object-item-delete {
-  width: 28px;
-  height: 28px;
-  border: none;
-  background: linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%);
-  color: white;
-  border-radius: 50%;
-  cursor: pointer;
-  font-size: 18px;
-  line-height: 1;
+
+.object-item-actions {
   display: flex;
+  flex-direction: row;
+  gap: 4px;
   align-items: center;
-  justify-content: center;
-  padding: 0;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  width: 100%;
+  margin-top: auto;
+}
+
+.status-btn {
+  padding: 4px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.05);
+  color: #ccc;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 500;
   transition: all 0.2s ease;
-  flex-shrink: 0;
-  box-shadow: 0 2px 4px rgba(255, 107, 107, 0.3);
+  min-width: 50px;
+  text-align: center;
 }
 
-.object-item-delete:hover {
-  background: linear-gradient(135deg, #ff5252 0%, #d32f2f 100%);
-  transform: scale(1.1);
-  box-shadow: 0 4px 8px rgba(255, 107, 107, 0.4);
+.status-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.3);
 }
 
-.object-item-delete:active {
-  transform: scale(0.95);
+.status-btn.active {
+  font-weight: 600;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.status-btn.reject.active {
+  background: rgba(255, 107, 107, 0.3);
+  border-color: #ff6b6b;
+  color: #ff6b6b;
+}
+
+.status-btn.attack.active {
+  background: rgba(255, 0, 0, 0.3);
+  border-color: #ff0000;
+  color: #ff0000;
+}
+
+.status-btn.hold.active {
+  background: rgba(0, 255, 0, 0.2);
+  border-color: #00ff00;
+  color: #00ff00;
 }
 

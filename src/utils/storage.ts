@@ -1,8 +1,15 @@
+export type ObjectStatus = 'reject' | 'attack' | 'hold' | null;
+
 export interface Rectangle {
   x: number;
   y: number;
   w: number;
   h: number;
+  status?: ObjectStatus; // Статус об'єкта: reject - приховати, attack - червоний з перехрестям, hold/null - стандартний
+  originalX?: number; // Оригінальна координата X для відкату змін
+  originalY?: number; // Оригінальна координата Y для відкату змін
+  originalW?: number; // Оригінальна ширина для відкату змін
+  originalH?: number; // Оригінальна висота для відкату змін
 }
 
 export interface VideoAnnotations {

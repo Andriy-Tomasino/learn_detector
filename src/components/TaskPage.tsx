@@ -8,6 +8,7 @@ import {
   type VideoProject,
   type Rectangle,
   type Task,
+  type ObjectStatus,
   type TaskCondition,
 } from '../utils/storage';
 import {
@@ -167,11 +168,17 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
                 console.log(`Конвертація: екран ${screenNumber}, XML індекс ${xmlFrameIndex}, локальний ${localFrameIndex}, глобальний ${globalFrameIndex}, боксів: ${(boxes as any[]).length}`);
                 
                 // Конвертуємо BoundingBox в Rectangle
+                // Зберігаємо оригінальні значення для можливості відкату змін
                 const rectangles: Rectangle[] = (boxes as any[]).map((box: any) => ({
                   x: box.x,
                   y: box.y,
                   w: box.width,
                   h: box.height,
+                  originalX: box.x, // Зберігаємо оригінальні координати
+                  originalY: box.y,
+                  originalW: box.width,
+                  originalH: box.height,
+                  status: 'hold' as const, // За замовчуванням hold
                 }));
                 
                 console.log(`Створено ${rectangles.length} rectangles для фрейму ${frameKeyStr}:`, rectangles.slice(0, 2));
@@ -374,11 +381,26 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
 
   const handleRectanglesChange = (rectangles: Rectangle[]) => {
     const frameKey = currentFrameIndex.toString();
+    // Зберігаємо статуси та оригінальні значення при оновленні rectangles
+    const updatedRectangles = rectangles.map((rect, index) => {
+      // Зберігаємо статус та оригінальні значення з попередніх rectangles, якщо вони є
+      const prevRect = annotations.frames[frameKey]?.[index];
+      return {
+        ...rect,
+        status: rect.status !== undefined ? rect.status : (prevRect?.status || 'hold'),
+        // Зберігаємо оригінальні значення, якщо вони вже є
+        originalX: prevRect?.originalX !== undefined ? prevRect.originalX : (rect.originalX !== undefined ? rect.originalX : rect.x),
+        originalY: prevRect?.originalY !== undefined ? prevRect.originalY : (rect.originalY !== undefined ? rect.originalY : rect.y),
+        originalW: prevRect?.originalW !== undefined ? prevRect.originalW : (rect.originalW !== undefined ? rect.originalW : rect.w),
+        originalH: prevRect?.originalH !== undefined ? prevRect.originalH : (rect.originalH !== undefined ? rect.originalH : rect.h),
+      };
+    });
+    
     const newAnnotations = {
       ...annotations,
       frames: {
         ...annotations.frames,
-        [frameKey]: rectangles,
+        [frameKey]: updatedRectangles,
       },
     };
     setAnnotations(newAnnotations);
@@ -387,22 +409,142 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
       saveCurrentTask(currentVideoId, newAnnotations, currentTaskId);
     }
 
-    if (selectedRectIndex !== null && selectedRectIndex >= rectangles.length) {
+    if (selectedRectIndex !== null && selectedRectIndex >= updatedRectangles.length) {
       setSelectedRectIndex(null);
     }
   };
 
   const handleRectSelect = (index: number) => {
+    // Індекс об'єкта в списку ObjectsList (всі об'єкти залишаються в списку)
     setSelectedRectIndex(index);
   };
 
-  const handleRectDelete = (index: number) => {
-    const newRectangles = currentRectangles.filter((_, i) => i !== index);
-    handleRectanglesChange(newRectangles);
-    if (selectedRectIndex === index) {
-      setSelectedRectIndex(null);
-    } else if (selectedRectIndex !== null && selectedRectIndex > index) {
-      setSelectedRectIndex(selectedRectIndex - 1);
+  /**
+   * Механіка режимів об'єктів:
+   * 
+   * 1. REJECT - приховує розмітку об'єкта:
+   *    - Об'єкт залишається в ObjectsList, але не малюється на canvas
+   *    - Статус застосовується до всіх фреймів, де присутній об'єкт
+   *    - Використовується для тимчасового приховування об'єкта без видалення
+   * 
+   * 2. ATTACK - виділяє об'єкт як ціль для атаки:
+   *    - Кордони боксу малюються червоним кольором (товщина 3px)
+   *    - Всередині боксу малюється перехрестя (діагональні лінії)
+   *    - Ручки для зміни розміру не відображаються
+   *    - Об'єкт НЕ можна переміщувати або змінювати розмір
+   *    - Статус застосовується до всіх фреймів, де присутній об'єкт
+   *    - Колір завжди червоний, навіть якщо об'єкт вибраний
+   * 
+   * 3. HOLD - режим відкату змін:
+   *    - Кордони боксу малюються зеленим кольором (товщина 2px)
+   *    - Ручки для зміни розміру НЕ відображаються
+   *    - Об'єкт НЕ можна переміщувати або змінювати розмір
+   *    - При натисканні hold відкатує зміни, повертаючи об'єкт до оригінальних координат та розмірів
+   *    - Статус застосовується до всіх фреймів, де присутній об'єкт
+   *    - Навіть якщо об'єкт вибраний, колір залишається зеленим (без синіх рамок)
+   * 
+   * Всі статуси працюють як перемикачі - тільки один може бути активним одночасно.
+   * При повторному натисканні на активну кнопку (крім hold) статус скидається до hold.
+   */
+  const handleStatusChange = (index: number, status: ObjectStatus) => {
+    const newRectangles = [...allRectangles];
+    const currentRect = newRectangles[index];
+    
+    if (status === 'hold') {
+      // При натисканні hold - відкатуємо зміни до оригінальних значень
+      if (currentRect.originalX !== undefined && currentRect.originalY !== undefined &&
+          currentRect.originalW !== undefined && currentRect.originalH !== undefined) {
+        // Відкатуємо до оригінальних координат та розмірів
+        newRectangles[index] = {
+          ...currentRect,
+          x: currentRect.originalX,
+          y: currentRect.originalY,
+          w: currentRect.originalW,
+          h: currentRect.originalH,
+          status: 'hold',
+        };
+      } else {
+        // Якщо оригінальних значень немає, зберігаємо поточні як оригінальні
+        newRectangles[index] = {
+          ...currentRect,
+          originalX: currentRect.x,
+          originalY: currentRect.y,
+          originalW: currentRect.w,
+          originalH: currentRect.h,
+          status: 'hold',
+        };
+      }
+    } else {
+      // Для інших статусів зберігаємо оригінальні значення, якщо їх ще немає
+      if (currentRect.originalX === undefined) {
+        newRectangles[index] = {
+          ...currentRect,
+          originalX: currentRect.x,
+          originalY: currentRect.y,
+          originalW: currentRect.w,
+          originalH: currentRect.h,
+          status,
+        };
+      } else {
+        newRectangles[index] = { ...currentRect, status };
+      }
+    }
+    
+    // Застосовуємо статус та зміни до всіх фреймів, де є об'єкт з таким самим індексом
+    const newAnnotations = { ...annotations };
+    Object.keys(newAnnotations.frames).forEach((frameKey) => {
+      const frameRectangles = newAnnotations.frames[frameKey];
+      if (frameRectangles && frameRectangles.length > index) {
+        const updatedRectangles = [...frameRectangles];
+        const frameRect = updatedRectangles[index];
+        
+        if (status === 'hold') {
+          // Відкатуємо зміни для всіх фреймів
+          if (frameRect.originalX !== undefined && frameRect.originalY !== undefined &&
+              frameRect.originalW !== undefined && frameRect.originalH !== undefined) {
+            updatedRectangles[index] = {
+              ...frameRect,
+              x: frameRect.originalX,
+              y: frameRect.originalY,
+              w: frameRect.originalW,
+              h: frameRect.originalH,
+              status: 'hold',
+            };
+          } else {
+            updatedRectangles[index] = {
+              ...frameRect,
+              originalX: frameRect.x,
+              originalY: frameRect.y,
+              originalW: frameRect.w,
+              originalH: frameRect.h,
+              status: 'hold',
+            };
+          }
+        } else {
+          // Для інших статусів зберігаємо оригінальні значення, якщо їх ще немає
+          if (frameRect.originalX === undefined) {
+            updatedRectangles[index] = {
+              ...frameRect,
+              originalX: frameRect.x,
+              originalY: frameRect.y,
+              originalW: frameRect.w,
+              originalH: frameRect.h,
+              status,
+            };
+          } else {
+            updatedRectangles[index] = { ...frameRect, status };
+          }
+        }
+        
+        newAnnotations.frames[frameKey] = updatedRectangles;
+      }
+    });
+    
+    setAnnotations(newAnnotations);
+    
+    // Зберігаємо зміни
+    if (currentVideoId) {
+      saveCurrentTask(currentVideoId, newAnnotations, currentTaskId);
     }
   };
 
@@ -472,7 +614,35 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
   };
 
   const currentFrame = frames[currentFrameIndex];
-  const currentRectangles = annotations.frames[currentFrameIndex.toString()] || [];
+  // Всі rectangles для поточного фрейму (включаючи reject - вони не малюються, але залишаються в списку)
+  const allRectangles = annotations.frames[currentFrameIndex.toString()] || [];
+  const currentRectangles = allRectangles; // Залишаємо всі об'єкти в списку
+  
+  // Визначаємо номер екрана для поточного фрейму
+  const getCurrentScreenNumber = (): number => {
+    if (!screenLayout || screenLayout.screens === 1) {
+      return 1;
+    }
+    
+    const framesPerScreen: number[] = [];
+    for (let i = 1; i <= screenLayout.screens; i++) {
+      const screenKey = `screen_${i}`;
+      const framesCount = parseInt(localStorage.getItem(`${screenKey}_frames_count`) || '0');
+      framesPerScreen.push(framesCount);
+    }
+    
+    let accumulatedFrames = 0;
+    for (let i = 0; i < framesPerScreen.length; i++) {
+      if (currentFrameIndex < accumulatedFrames + framesPerScreen[i]) {
+        return i + 1;
+      }
+      accumulatedFrames += framesPerScreen[i];
+    }
+    
+    return 1;
+  };
+  
+  const currentScreenNumber = getCurrentScreenNumber();
   
   // Логування для діагностики
   useEffect(() => {
@@ -579,7 +749,7 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
               frameImage={currentFrame.imageData}
               frameIndex={currentFrameIndex}
               totalFrames={frames.length}
-              rectangles={currentRectangles}
+              rectangles={allRectangles}
               onRectanglesChange={handleRectanglesChange}
               creationMode={creationMode}
               onCreationModeChange={setCreationMode}
@@ -697,7 +867,8 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
             rectangles={currentRectangles}
             selectedIndex={selectedRectIndex}
             onSelect={handleRectSelect}
-            onDelete={handleRectDelete}
+            onStatusChange={handleStatusChange}
+            screenNumber={currentScreenNumber}
           />
         )}
       </div>
