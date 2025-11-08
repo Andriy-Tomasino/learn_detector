@@ -2,12 +2,19 @@ import React from 'react';
 import { Rectangle, ObjectStatus } from '../utils/storage';
 import './ObjectsList.css';
 
+interface ScreenRectangle {
+  rectangle: Rectangle;
+  screenNumber: number;
+  localIndex: number;
+}
+
 interface ObjectsListProps {
   rectangles: Rectangle[];
   selectedIndex: number | null;
   onSelect: (index: number) => void;
   onStatusChange?: (index: number, status: ObjectStatus) => void;
-  screenNumber?: number; // Номер екрана для форматування назви
+  screenNumber?: number; // Номер екрана для форматування назви (для зворотної сумісності)
+  screenRectangles?: ScreenRectangle[]; // Масив з інформацією про екран для кожного rectangle
 }
 
 export const ObjectsList: React.FC<ObjectsListProps> = ({
@@ -16,6 +23,7 @@ export const ObjectsList: React.FC<ObjectsListProps> = ({
   onSelect,
   onStatusChange,
   screenNumber = 1,
+  screenRectangles,
 }) => {
   const handleStatusClick = (e: React.MouseEvent, index: number, status: ObjectStatus) => {
     e.stopPropagation();
@@ -42,7 +50,11 @@ export const ObjectsList: React.FC<ObjectsListProps> = ({
         ) : (
           rectangles.map((rect, index) => {
             const currentStatus = rect.status || 'hold';
-            const objectName = `${screenNumber}_${index + 1}`;
+            // Використовуємо screenRectangles для отримання правильного номера екрана та локального індексу
+            const screenRect = screenRectangles?.[index];
+            const objectScreenNumber = screenRect?.screenNumber || screenNumber;
+            const objectLocalIndex = screenRect?.localIndex !== undefined ? screenRect.localIndex : index;
+            const objectName = `${objectScreenNumber}_${objectLocalIndex + 1}`;
             return (
               <div
                 key={index}

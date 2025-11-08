@@ -16,6 +16,7 @@ import {
   saveProjectToDB,
   loadFile,
   getProjectFile,
+  loadAllProjectsFromDB,
 } from '../utils/database';
 import { extractFramesFromVideo, loadImageAsFrame, type VideoFrame } from '../utils/videoUtils';
 import { parseXmlAnnotations, type ParsedAnnotation } from '../utils/xmlParser';
@@ -39,6 +40,9 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
   const [isDetecting, setIsDetecting] = useState(false);
   const [screenLayout, setScreenLayout] = useState<{ screens: number; screenData?: any[] } | null>(null);
   const [xmlAnnotations, setXmlAnnotations] = useState<{ [screenNumber: number]: ParsedAnnotation }>({});
+  const [screenProjects, setScreenProjects] = useState<{ [screenNumber: number]: VideoProject }>({});
+  const [screenFrames, setScreenFrames] = useState<{ [screenNumber: number]: VideoFrame[] }>({});
+  const [screenFrameIndices, setScreenFrameIndices] = useState<{ [screenNumber: number]: number }>({});
   const [isPlaying, setIsPlaying] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const playIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -52,11 +56,18 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
           const layout = JSON.parse(layoutData);
           setScreenLayout(layout);
 
+          // Завантажуємо всі проекти з IndexedDB
+          const allProjects = await loadAllProjectsFromDB();
+          console.log('Завантажено проектів з БД:', allProjects.length);
+          console.log('screenLayout.screens:', layout.screens);
+          
           // Завантажуємо XML та фрейми для кожного екрана
           const annotations: { [screenNumber: number]: ParsedAnnotation } = {};
-          const loadedFrames: VideoFrame[] = [];
-          let frameIndex = 0;
+          const projects: { [screenNumber: number]: VideoProject } = {};
+          const frames: { [screenNumber: number]: VideoFrame[] } = {};
+          const frameIndices: { [screenNumber: number]: number } = {};
 
+          // Завантажуємо проекти для кожного екрана
           for (let i = 0; i < layout.screens; i++) {
             const screenNumber = i + 1;
             const screenKey = `screen_${screenNumber}`;
@@ -72,16 +83,54 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
               }
             }
 
-            // Фрейми тепер зберігаються в проєкті в IndexedDB, а не в localStorage
-            // Завантажуємо тільки кількість для відображення інформації
-            const framesCount = parseInt(localStorage.getItem(`${screenKey}_frames_count`) || '0');
-            // Фрейми будуть завантажені з проєкту, якщо він відкритий
+            // Знаходимо проект для цього екрана за назвою
+            const screenProject = allProjects.find(project => {
+              const screenMatch = project.fileName.match(/Screen_(\d+)_/);
+              return screenMatch && parseInt(screenMatch[1]) === screenNumber;
+            });
+
+            console.log(`Екран ${screenNumber}:`, screenProject ? `Знайдено проект: ${screenProject.fileName}` : 'Проект не знайдено');
+
+            // Завантажуємо фрейми з проекту
+            if (screenProject) {
+              projects[screenNumber] = screenProject;
+              if (screenProject.frames) {
+                const screenFramesList: VideoFrame[] = [];
+                for (let j = 0; j < screenProject.frames.length; j++) {
+                  screenFramesList.push({
+                    index: j,
+                    imageData: screenProject.frames[j],
+                  });
+                }
+                frames[screenNumber] = screenFramesList;
+                frameIndices[screenNumber] = 0;
+                console.log(`Екран ${screenNumber}: завантажено ${screenFramesList.length} фреймів`);
+                
+                // Діагностика анотацій
+                if (screenProject.annotations && screenProject.annotations.frames) {
+                  const annotationKeys = Object.keys(screenProject.annotations.frames);
+                  console.log(`Екран ${screenNumber}: анотації з ключами:`, annotationKeys.slice(0, 10), `... (всього ${annotationKeys.length})`);
+                }
+              }
+            }
           }
+          
+          console.log('Завантажені проекти:', Object.keys(projects));
+          console.log('Завантажені фрейми:', Object.keys(frames));
 
           setXmlAnnotations(annotations);
-          if (loadedFrames.length > 0) {
-            setFrames(loadedFrames);
-            setCurrentFrameIndex(0);
+          setScreenProjects(projects);
+          setScreenFrames(frames);
+          setScreenFrameIndices(frameIndices);
+          
+          // Встановлюємо перший екран як активний для зворотної сумісності
+          if (Object.keys(frames).length > 0) {
+            const firstScreen = Object.keys(frames)[0];
+            const firstScreenNumber = parseInt(firstScreen);
+            if (frames[firstScreenNumber] && frames[firstScreenNumber].length > 0) {
+              setFrames(frames[firstScreenNumber]);
+              setCurrentFrameIndex(0);
+            }
           }
         } catch (error) {
           console.error('Error loading screen layout:', error);
@@ -447,15 +496,57 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
    * При повторному натисканні на активну кнопку (крім hold) статус скидається до hold.
    */
   const handleStatusChange = (index: number, status: ObjectStatus) => {
-    const newRectangles = [...allRectangles];
-    const currentRect = newRectangles[index];
+    // Отримуємо інформацію про екран для цього rectangle
+    const screenRect = allScreenRectangles[index];
+    if (!screenRect) return;
+    
+    const { screenNumber, localIndex } = screenRect;
+    const screenProject = screenProjects[screenNumber];
+    if (!screenProject) return;
+    
+    const screenAnnotations = screenProject.annotations || { frames: {} };
+    
+    // Знаходимо мінімальний ключ в анотаціях для цього екрана (offset)
+    const annotationKeys = Object.keys(screenAnnotations.frames);
+    let annotationOffset = 0;
+    if (annotationKeys.length > 0) {
+      const numericKeys = annotationKeys.map(k => parseInt(k)).filter(k => !isNaN(k));
+      if (numericKeys.length > 0) {
+        annotationOffset = Math.min(...numericKeys);
+      }
+    }
+    
+    // Обчислюємо глобальний індекс фрейму
+    const screenFrameIndex = screenFrameIndices[screenNumber] || 0;
+    const globalFrameIndex = annotationOffset + screenFrameIndex;
+    
+    // Отримуємо rectangles для цього екрана та фрейму
+    let screenRects = screenAnnotations.frames[globalFrameIndex.toString()] || [];
+    
+    // Якщо не знайдено, спробуємо знайти найближчий ключ
+    if (screenRects.length === 0 && annotationKeys.length > 0) {
+      const numericKeys = annotationKeys.map(k => parseInt(k)).filter(k => !isNaN(k));
+      if (numericKeys.length > 0) {
+        const closestKey = numericKeys.reduce((prev, curr) => 
+          Math.abs(curr - globalFrameIndex) < Math.abs(prev - globalFrameIndex) ? curr : prev
+        );
+        if (Math.abs(closestKey - globalFrameIndex) <= 5) {
+          screenRects = screenAnnotations.frames[closestKey.toString()] || [];
+        }
+      }
+    }
+    
+    if (localIndex >= screenRects.length) return;
+    
+    const newRectangles = [...screenRects];
+    const currentRect = newRectangles[localIndex];
     
     if (status === 'hold') {
       // При натисканні hold - відкатуємо зміни до оригінальних значень
       if (currentRect.originalX !== undefined && currentRect.originalY !== undefined &&
           currentRect.originalW !== undefined && currentRect.originalH !== undefined) {
         // Відкатуємо до оригінальних координат та розмірів
-        newRectangles[index] = {
+        newRectangles[localIndex] = {
           ...currentRect,
           x: currentRect.originalX,
           y: currentRect.originalY,
@@ -465,7 +556,7 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
         };
       } else {
         // Якщо оригінальних значень немає, зберігаємо поточні як оригінальні
-        newRectangles[index] = {
+        newRectangles[localIndex] = {
           ...currentRect,
           originalX: currentRect.x,
           originalY: currentRect.y,
@@ -477,7 +568,7 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
     } else {
       // Для інших статусів зберігаємо оригінальні значення, якщо їх ще немає
       if (currentRect.originalX === undefined) {
-        newRectangles[index] = {
+        newRectangles[localIndex] = {
           ...currentRect,
           originalX: currentRect.x,
           originalY: currentRect.y,
@@ -486,23 +577,25 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
           status,
         };
       } else {
-        newRectangles[index] = { ...currentRect, status };
+        newRectangles[localIndex] = { ...currentRect, status };
       }
     }
     
-    // Застосовуємо статус та зміни до всіх фреймів, де є об'єкт з таким самим індексом
-    const newAnnotations = { ...annotations };
-    Object.keys(newAnnotations.frames).forEach((frameKey) => {
-      const frameRectangles = newAnnotations.frames[frameKey];
-      if (frameRectangles && frameRectangles.length > index) {
+    // Оновлюємо анотації для цього екрана
+    const updatedScreenAnnotations = { ...screenAnnotations };
+    
+    // Застосовуємо статус до всіх фреймів, де присутній об'єкт з таким самим локальним індексом
+    Object.keys(updatedScreenAnnotations.frames).forEach((frameKey) => {
+      const frameRectangles = updatedScreenAnnotations.frames[frameKey];
+      if (frameRectangles && frameRectangles.length > localIndex) {
         const updatedRectangles = [...frameRectangles];
-        const frameRect = updatedRectangles[index];
+        const frameRect = updatedRectangles[localIndex];
         
         if (status === 'hold') {
           // Відкатуємо зміни для всіх фреймів
           if (frameRect.originalX !== undefined && frameRect.originalY !== undefined &&
               frameRect.originalW !== undefined && frameRect.originalH !== undefined) {
-            updatedRectangles[index] = {
+            updatedRectangles[localIndex] = {
               ...frameRect,
               x: frameRect.originalX,
               y: frameRect.originalY,
@@ -511,7 +604,8 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
               status: 'hold',
             };
           } else {
-            updatedRectangles[index] = {
+            // Якщо оригінальних значень немає, зберігаємо поточні як оригінальні
+            updatedRectangles[localIndex] = {
               ...frameRect,
               originalX: frameRect.x,
               originalY: frameRect.y,
@@ -523,7 +617,7 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
         } else {
           // Для інших статусів зберігаємо оригінальні значення, якщо їх ще немає
           if (frameRect.originalX === undefined) {
-            updatedRectangles[index] = {
+            updatedRectangles[localIndex] = {
               ...frameRect,
               originalX: frameRect.x,
               originalY: frameRect.y,
@@ -532,20 +626,30 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
               status,
             };
           } else {
-            updatedRectangles[index] = { ...frameRect, status };
+            updatedRectangles[localIndex] = { ...frameRect, status };
           }
         }
         
-        newAnnotations.frames[frameKey] = updatedRectangles;
+        updatedScreenAnnotations.frames[frameKey] = updatedRectangles;
       }
     });
     
-    setAnnotations(newAnnotations);
+    // Оновлюємо проект
+    const updatedProject = {
+      ...screenProject,
+      annotations: updatedScreenAnnotations,
+    };
     
-    // Зберігаємо зміни
-    if (currentVideoId) {
-      saveCurrentTask(currentVideoId, newAnnotations, currentTaskId);
-    }
+    // Оновлюємо стан
+    setScreenProjects({
+      ...screenProjects,
+      [screenNumber]: updatedProject,
+    });
+    
+    // Зберігаємо зміни в БД
+    saveProjectToDB(updatedProject).catch(error => {
+      console.error(`Помилка збереження проекту для екрана ${screenNumber}:`, error);
+    });
   };
 
   const handleSave = async () => {
@@ -614,9 +718,60 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
   };
 
   const currentFrame = frames[currentFrameIndex];
-  // Всі rectangles для поточного фрейму (включаючи reject - вони не малюються, але залишаються в списку)
+  
+  // Збираємо rectangles з усіх екранів для поточного фрейму
+  const allScreenRectangles: Array<{ rectangle: Rectangle; screenNumber: number; localIndex: number }> = [];
+  
+  if (screenLayout && screenLayout.screens > 0) {
+    for (let screenNum = 1; screenNum <= screenLayout.screens; screenNum++) {
+      const screenFramesList = screenFrames[screenNum] || [];
+      const screenFrameIndex = screenFrameIndices[screenNum] || 0;
+      const screenProject = screenProjects[screenNum];
+      const screenAnnotations = screenProject?.annotations || { frames: {} };
+      
+      // Знаходимо мінімальний ключ в анотаціях для цього екрана (offset)
+      const annotationKeys = Object.keys(screenAnnotations.frames);
+      let annotationOffset = 0;
+      if (annotationKeys.length > 0) {
+        const numericKeys = annotationKeys.map(k => parseInt(k)).filter(k => !isNaN(k));
+        if (numericKeys.length > 0) {
+          annotationOffset = Math.min(...numericKeys);
+        }
+      }
+      
+      // Обчислюємо глобальний індекс фрейму: offset + локальний індекс
+      const globalFrameIndex = annotationOffset + screenFrameIndex;
+      
+      // Отримуємо rectangles для цього екрана
+      let screenRects = screenAnnotations.frames[globalFrameIndex.toString()] || [];
+      
+      // Якщо не знайдено, спробуємо знайти найближчий ключ
+      if (screenRects.length === 0 && annotationKeys.length > 0) {
+        const numericKeys = annotationKeys.map(k => parseInt(k)).filter(k => !isNaN(k));
+        if (numericKeys.length > 0) {
+          const closestKey = numericKeys.reduce((prev, curr) => 
+            Math.abs(curr - globalFrameIndex) < Math.abs(prev - globalFrameIndex) ? curr : prev
+          );
+          if (Math.abs(closestKey - globalFrameIndex) <= 5) {
+            screenRects = screenAnnotations.frames[closestKey.toString()] || [];
+          }
+        }
+      }
+      
+      // Додаємо rectangles з інформацією про екран
+      screenRects.forEach((rect, localIndex) => {
+        allScreenRectangles.push({
+          rectangle: rect,
+          screenNumber: screenNum,
+          localIndex: localIndex,
+        });
+      });
+    }
+  }
+  
+  // Для зворотної сумісності зі старим кодом
   const allRectangles = annotations.frames[currentFrameIndex.toString()] || [];
-  const currentRectangles = allRectangles; // Залишаємо всі об'єкти в списку
+  const currentRectangles = allScreenRectangles.map(item => item.rectangle);
   
   // Визначаємо номер екрана для поточного фрейму
   const getCurrentScreenNumber = (): number => {
@@ -662,22 +817,64 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
     }
   }, [currentFrameIndex, annotations, frames.length]);
 
-  // Управління відтворенням фреймів
+  // Знаходимо мінімальну кількість фреймів серед усіх екранів
+  const getMinFramesCount = (): number => {
+    const counts = Object.values(screenFrames).map(frames => frames.length);
+    return counts.length > 0 ? Math.min(...counts) : 0;
+  };
+
+  // Перевіряємо, чи всі екрани на максимальному фреймі
+  const areAllScreensAtMaxFrame = (): boolean => {
+    if (Object.keys(screenFrames).length === 0) return true;
+    return Object.keys(screenFrames).every(screenNumStr => {
+      const screenNum = parseInt(screenNumStr);
+      const framesCount = screenFrames[screenNum].length;
+      const currentIndex = screenFrameIndices[screenNum] || 0;
+      return currentIndex >= framesCount - 1;
+    });
+  };
+
+  // Перевіряємо, чи всі екрани на початковому фреймі
+  const areAllScreensAtStartFrame = (): boolean => {
+    if (Object.keys(screenFrames).length === 0) return true;
+    return Object.keys(screenFrames).every(screenNumStr => {
+      const screenNum = parseInt(screenNumStr);
+      const currentIndex = screenFrameIndices[screenNum] || 0;
+      return currentIndex === 0;
+    });
+  };
+
+  // Управління відтворенням фреймів для всіх екранів одночасно
   const handlePlay = () => {
-    if (frames.length === 0) return;
+    const minFrames = getMinFramesCount();
+    if (minFrames === 0) return;
     
     setIsPlaying(true);
     playIntervalRef.current = setInterval(() => {
-      setCurrentFrameIndex((prev) => {
-        if (prev >= frames.length - 1) {
+      setScreenFrameIndices((prev) => {
+        const newIndices = { ...prev };
+        let allAtMax = true;
+        
+        // Перевіряємо, чи всі екрани на максимальному фреймі
+        Object.keys(screenFrames).forEach(screenNumStr => {
+          const screenNum = parseInt(screenNumStr);
+          const framesCount = screenFrames[screenNum].length;
+          const currentIndex = prev[screenNum] || 0;
+          if (currentIndex < framesCount - 1) {
+            newIndices[screenNum] = currentIndex + 1;
+            allAtMax = false;
+          }
+        });
+        
+        if (allAtMax) {
           setIsPlaying(false);
           if (playIntervalRef.current) {
             clearInterval(playIntervalRef.current);
             playIntervalRef.current = null;
           }
-          return prev;
         }
-        return prev + 1;
+        
+        return newIndices;
       });
     }, 200); // 200ms між фреймами (5 FPS)
   };
@@ -691,15 +888,36 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
   };
 
   const handlePreviousFrame = () => {
-    if (currentFrameIndex > 0) {
-      setCurrentFrameIndex(currentFrameIndex - 1);
-    }
+    if (areAllScreensAtStartFrame()) return;
+    
+    setScreenFrameIndices((prev) => {
+      const newIndices = { ...prev };
+      Object.keys(screenFrames).forEach(screenNumStr => {
+        const screenNum = parseInt(screenNumStr);
+        const currentIndex = prev[screenNum] || 0;
+        if (currentIndex > 0) {
+          newIndices[screenNum] = currentIndex - 1;
+        }
+      });
+      return newIndices;
+    });
   };
 
   const handleNextFrame = () => {
-    if (currentFrameIndex < frames.length - 1) {
-      setCurrentFrameIndex(currentFrameIndex + 1);
-    }
+    if (areAllScreensAtMaxFrame()) return;
+    
+    setScreenFrameIndices((prev) => {
+      const newIndices = { ...prev };
+      Object.keys(screenFrames).forEach(screenNumStr => {
+        const screenNum = parseInt(screenNumStr);
+        const framesCount = screenFrames[screenNum].length;
+        const currentIndex = prev[screenNum] || 0;
+        if (currentIndex < framesCount - 1) {
+          newIndices[screenNum] = currentIndex + 1;
+        }
+      });
+      return newIndices;
+    });
   };
 
   // Очищення інтервалу при розмонтуванні
@@ -744,30 +962,162 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
           >
             {isDetecting ? 'Stop Detecting' : 'Detecting'}
           </button>
-          {currentFrame ? (
-            <FrameViewer
-              frameImage={currentFrame.imageData}
-              frameIndex={currentFrameIndex}
-              totalFrames={frames.length}
-              rectangles={allRectangles}
-              onRectanglesChange={handleRectanglesChange}
-              creationMode={creationMode}
-              onCreationModeChange={setCreationMode}
-              selectedRectIndex={selectedRectIndex}
-              onRectSelect={setSelectedRectIndex}
-              isDetecting={isDetecting}
-              screenLayout={screenLayout}
-              xmlAnnotations={xmlAnnotations}
-              currentScreenNumber={1}
-            />
+          {screenLayout && screenLayout.screens > 0 ? (
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: screenLayout.screens === 1 ? '1fr' : screenLayout.screens === 2 ? '1fr 1fr' : '1fr 1fr',
+              gridTemplateRows: screenLayout.screens <= 2 ? '1fr' : '1fr 1fr',
+              gap: '10px',
+              width: '100%',
+              height: '100%',
+            }}>
+              {Array.from({ length: screenLayout.screens }).map((_, index) => {
+                const screenNumber = index + 1;
+                const screenFramesList = screenFrames[screenNumber] || [];
+                const screenFrameIndex = screenFrameIndices[screenNumber] || 0;
+                const currentScreenFrame = screenFramesList[screenFrameIndex];
+                const screenProject = screenProjects[screenNumber];
+                const screenAnnotations = screenProject?.annotations || { frames: {} };
+                
+                // Знаходимо мінімальний ключ в анотаціях для цього екрана (offset)
+                const annotationKeys = Object.keys(screenAnnotations.frames);
+                let annotationOffset = 0;
+                if (annotationKeys.length > 0) {
+                  const numericKeys = annotationKeys.map(k => parseInt(k)).filter(k => !isNaN(k));
+                  if (numericKeys.length > 0) {
+                    annotationOffset = Math.min(...numericKeys);
+                  }
+                }
+                
+                // Обчислюємо глобальний індекс фрейму: offset + локальний індекс
+                const globalFrameIndex = annotationOffset + screenFrameIndex;
+                
+                // Шукаємо rectangles за обчисленим глобальним індексом
+                let screenRectangles = screenAnnotations.frames[globalFrameIndex.toString()] || [];
+                
+                // Якщо не знайдено, спробуємо знайти найближчий ключ
+                if (screenRectangles.length === 0 && annotationKeys.length > 0) {
+                  const numericKeys = annotationKeys.map(k => parseInt(k)).filter(k => !isNaN(k));
+                  if (numericKeys.length > 0) {
+                    const closestKey = numericKeys.reduce((prev, curr) => 
+                      Math.abs(curr - globalFrameIndex) < Math.abs(prev - globalFrameIndex) ? curr : prev
+                    );
+                    if (Math.abs(closestKey - globalFrameIndex) <= 5) {
+                      screenRectangles = screenAnnotations.frames[closestKey.toString()] || [];
+                    }
+                  }
+                }
+                
+                // Діагностика для першого екрана та першого фрейму
+                if (screenNumber === 1 && screenFrameIndex === 0) {
+                  console.log(`Діагностика для Екран ${screenNumber}, фрейм ${screenFrameIndex}:`);
+                  console.log(`  Annotation offset: ${annotationOffset}`);
+                  console.log(`  Глобальний індекс: ${globalFrameIndex}`);
+                  console.log(`  Доступні ключі в annotations:`, Object.keys(screenAnnotations.frames).slice(0, 10));
+                  console.log(`  Знайдено rectangles:`, screenRectangles.length);
+                }
+
+                return (
+                  <div key={screenNumber} style={{
+                    position: 'relative',
+                    width: '100%',
+                    height: '100%',
+                    border: '2px solid #333',
+                    borderRadius: '8px',
+                    overflow: 'hidden',
+                  }}>
+                    <div style={{
+                      position: 'absolute',
+                      top: '10px',
+                      left: '10px',
+                      backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                      color: '#fff',
+                      padding: '5px 10px',
+                      borderRadius: '4px',
+                      fontSize: '14px',
+                      fontWeight: '600',
+                      zIndex: 10,
+                    }}>
+                      Екран {screenNumber}
+                    </div>
+                    {screenFramesList.length > 0 && (
+                      <div style={{
+                        position: 'absolute',
+                        bottom: '10px',
+                        left: '10px',
+                        backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                        color: '#fff',
+                        padding: '5px 10px',
+                        borderRadius: '4px',
+                        fontSize: '12px',
+                        zIndex: 10,
+                      }}>
+                        {screenFrameIndices[screenNumber] + 1} / {screenFramesList.length}
+                      </div>
+                    )}
+                    {currentScreenFrame ? (
+                      <FrameViewer
+                        frameImage={currentScreenFrame.imageData}
+                        frameIndex={screenFrameIndex}
+                        totalFrames={screenFramesList.length}
+                        rectangles={screenRectangles}
+                        onRectanglesChange={(newRects) => {
+                          if (screenProject) {
+                            const updatedAnnotations = { ...screenAnnotations };
+                            // Використовуємо глобальний індекс для збереження
+                            updatedAnnotations.frames[globalFrameIndex.toString()] = newRects;
+                            const updatedProject = {
+                              ...screenProject,
+                              annotations: updatedAnnotations,
+                            };
+                            setScreenProjects({
+                              ...screenProjects,
+                              [screenNumber]: updatedProject,
+                            });
+                            // Зберігаємо оновлені анотації в БД
+                            saveProjectToDB(updatedProject).catch(error => {
+                              console.error(`Помилка збереження проекту для екрана ${screenNumber}:`, error);
+                            });
+                          }
+                        }}
+                        creationMode={creationMode}
+                        onCreationModeChange={setCreationMode}
+                        selectedRectIndex={selectedRectIndex}
+                        onRectSelect={setSelectedRectIndex}
+                        isDetecting={isDetecting}
+                        screenLayout={{ screens: 1 }}
+                        xmlAnnotations={xmlAnnotations[screenNumber] ? { 1: xmlAnnotations[screenNumber] } : null}
+                        currentScreenNumber={1}
+                        rectangleLabels={screenRectangles.reduce((labels, rect, localIndex) => {
+                          labels[localIndex] = `${screenNumber}_${localIndex + 1}`;
+                          return labels;
+                        }, {} as { [index: number]: string })}
+                      />
+                    ) : (
+                      <div style={{ 
+                        color: '#fff', 
+                        textAlign: 'center', 
+                        padding: '20px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        height: '100%',
+                      }}>
+                        Немає даних для екрана {screenNumber}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           ) : (
             <div style={{ color: '#fff', textAlign: 'center' }}>
               Upload video or photo to get started
             </div>
           )}
           
-          {/* Кнопки управління плейером */}
-          {currentFrame && frames.length > 0 && (
+          {/* Кнопки управління плейером для всіх екранів */}
+          {screenLayout && screenLayout.screens > 0 && Object.keys(screenFrames).length > 0 && (
             <div style={{
               position: 'absolute',
               bottom: '20px',
@@ -783,17 +1133,17 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
             }}>
               <button
                 onClick={handlePreviousFrame}
-                disabled={currentFrameIndex === 0}
+                disabled={areAllScreensAtStartFrame()}
                 style={{
                   padding: '8px 16px',
                   border: 'none',
                   borderRadius: '6px',
                   fontSize: '14px',
                   fontWeight: '600',
-                  cursor: currentFrameIndex === 0 ? 'not-allowed' : 'pointer',
-                  backgroundColor: currentFrameIndex === 0 ? '#666' : '#2196f3',
+                  cursor: areAllScreensAtStartFrame() ? 'not-allowed' : 'pointer',
+                  backgroundColor: areAllScreensAtStartFrame() ? '#666' : '#2196f3',
                   color: '#ffffff',
-                  opacity: currentFrameIndex === 0 ? 0.5 : 1,
+                  opacity: areAllScreensAtStartFrame() ? 0.5 : 1,
                 }}
               >
                 ◀ Попередній
@@ -802,15 +1152,17 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
               {!isPlaying ? (
                 <button
                   onClick={handlePlay}
+                  disabled={getMinFramesCount() === 0}
                   style={{
                     padding: '8px 16px',
                     border: 'none',
                     borderRadius: '6px',
                     fontSize: '14px',
                     fontWeight: '600',
-                    cursor: 'pointer',
-                    backgroundColor: '#4caf50',
+                    cursor: getMinFramesCount() === 0 ? 'not-allowed' : 'pointer',
+                    backgroundColor: getMinFramesCount() === 0 ? '#666' : '#4caf50',
                     color: '#ffffff',
+                    opacity: getMinFramesCount() === 0 ? 0.5 : 1,
                   }}
                 >
                   ▶ Відтворити
@@ -835,40 +1187,32 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
               
               <button
                 onClick={handleNextFrame}
-                disabled={currentFrameIndex >= frames.length - 1}
+                disabled={areAllScreensAtMaxFrame()}
                 style={{
                   padding: '8px 16px',
                   border: 'none',
                   borderRadius: '6px',
                   fontSize: '14px',
                   fontWeight: '600',
-                  cursor: currentFrameIndex >= frames.length - 1 ? 'not-allowed' : 'pointer',
-                  backgroundColor: currentFrameIndex >= frames.length - 1 ? '#666' : '#2196f3',
+                  cursor: areAllScreensAtMaxFrame() ? 'not-allowed' : 'pointer',
+                  backgroundColor: areAllScreensAtMaxFrame() ? '#666' : '#2196f3',
                   color: '#ffffff',
-                  opacity: currentFrameIndex >= frames.length - 1 ? 0.5 : 1,
+                  opacity: areAllScreensAtMaxFrame() ? 0.5 : 1,
                 }}
               >
                 Наступний ▶
               </button>
               
-              <div style={{
-                marginLeft: '15px',
-                color: '#ffffff',
-                fontSize: '14px',
-                fontWeight: '500',
-              }}>
-                {currentFrameIndex + 1} / {frames.length}
-              </div>
             </div>
           )}
         </div>
-        {currentFrame && (
+        {screenLayout && screenLayout.screens > 0 && (
           <ObjectsList
             rectangles={currentRectangles}
             selectedIndex={selectedRectIndex}
             onSelect={handleRectSelect}
             onStatusChange={handleStatusChange}
-            screenNumber={currentScreenNumber}
+            screenRectangles={allScreenRectangles}
           />
         )}
       </div>

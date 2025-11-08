@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { exportProject, createVideoId, type VideoProject } from '../utils/storage';
+import { type VideoProject } from '../utils/storage';
 import { loadAllProjectsFromDB, deleteProjectFromDB, getProjectFile, saveProjectToDB } from '../utils/database';
 import { ScreenLayoutModal } from './ScreenLayoutModal';
 import { parseXmlAnnotations } from '../utils/xmlParser';
@@ -16,8 +16,8 @@ interface ScreenData {
 
 export const ProjectPage: React.FC<ProjectPageProps> = ({ onProjectSelect }) => {
   const [projects, setProjects] = useState<{ [key: string]: VideoProject }>({});
-  const [selectedProject, setSelectedProject] = useState<VideoProject | null>(null);
   const [isLayoutModalOpen, setIsLayoutModalOpen] = useState(false);
+  const [selectedScreen, setSelectedScreen] = useState<number | null>(null);
 
   useEffect(() => {
     loadProjects();
@@ -44,9 +44,59 @@ export const ProjectPage: React.FC<ProjectPageProps> = ({ onProjectSelect }) => 
       try {
         await deleteProjectFromDB(videoId);
         await loadProjects();
-        if (selectedProject?.id === videoId) {
-          setSelectedProject(null);
+        
+        // Оновлюємо screenLayout на основі зайнятих екранів після видалення
+        const updatedProjectsList = await loadAllProjectsFromDB();
+        const updatedOccupancy: { [key: number]: { isOccupied: boolean; projectName?: string } } = {
+          1: { isOccupied: false },
+          2: { isOccupied: false },
+          3: { isOccupied: false },
+          4: { isOccupied: false },
+        };
+        
+        updatedProjectsList.forEach((proj) => {
+          const screenMatch = proj.fileName.match(/Screen_(\d+)_/);
+          if (screenMatch) {
+            const screenNum = parseInt(screenMatch[1]);
+            if (screenNum >= 1 && screenNum <= 4) {
+              updatedOccupancy[screenNum] = {
+                isOccupied: true,
+                projectName: proj.fileName,
+              };
+            }
+          }
+        });
+        
+        const occupiedCount = Object.values(updatedOccupancy).filter(screen => screen.isOccupied).length;
+        const screensCount = Math.max(1, occupiedCount);
+        
+        const layoutData = localStorage.getItem('screenLayout');
+        let layoutInfo: any = { screens: screensCount, screenFiles: [] };
+        
+        if (layoutData) {
+          try {
+            layoutInfo = JSON.parse(layoutData);
+          } catch (error) {
+            console.error('Error parsing screenLayout:', error);
+          }
         }
+        
+        layoutInfo.screens = screensCount;
+        layoutInfo.screenFiles = [];
+        for (let i = 1; i <= 4; i++) {
+          if (updatedOccupancy[i].isOccupied) {
+            const screenKey = `screen_${i}`;
+            const framesCount = parseInt(localStorage.getItem(`${screenKey}_frames_count`) || '0');
+            layoutInfo.screenFiles.push({
+              screenNumber: i,
+              xmlFileName: null,
+              framesCount: framesCount,
+            });
+          }
+        }
+        
+        localStorage.setItem('screenLayout', JSON.stringify(layoutInfo));
+        
         alert('Проєкт успішно видалено.');
       } catch (error) {
         console.error('Error deleting project:', error);
@@ -55,13 +105,6 @@ export const ProjectPage: React.FC<ProjectPageProps> = ({ onProjectSelect }) => 
     }
   };
 
-  const handleExport = (project: VideoProject) => {
-    exportProject(project);
-  };
-
-  const handleSelect = (project: VideoProject) => {
-    setSelectedProject(project);
-  };
 
   const formatFileSize = (bytes: number): string => {
     if (bytes < 1024) return bytes + ' B';
@@ -83,6 +126,45 @@ export const ProjectPage: React.FC<ProjectPageProps> = ({ onProjectSelect }) => 
 
   const projectList = Object.values(projects);
 
+  // Визначаємо зайнятість екранів на основі назв проектів
+  const getScreenOccupancy = () => {
+    const occupied: { [key: number]: { isOccupied: boolean; projectName?: string } } = {
+      1: { isOccupied: false },
+      2: { isOccupied: false },
+      3: { isOccupied: false },
+      4: { isOccupied: false },
+    };
+    
+    projectList.forEach((project) => {
+      // Перевіряємо, чи назва проекту містить номер екрана
+      const screenMatch = project.fileName.match(/Screen_(\d+)_/);
+      if (screenMatch) {
+        const screenNum = parseInt(screenMatch[1]);
+        if (screenNum >= 1 && screenNum <= 4) {
+          occupied[screenNum] = {
+            isOccupied: true,
+            projectName: project.fileName,
+          };
+        }
+      }
+    });
+    
+    return occupied;
+  };
+
+  const screenOccupancy = getScreenOccupancy();
+
+  // Знаходимо перший вільний екран
+  const getFirstFreeScreen = (): number | null => {
+    for (let i = 1; i <= 4; i++) {
+      if (!screenOccupancy[i].isOccupied) {
+        return i;
+      }
+    }
+    return null;
+  };
+
+
   const handleLayoutSave = async (layout: { screens: number; screenData: Array<{ xmlFile: File | null; framesFiles: File[] }> }) => {
     try {
       // Валідація: перевіряємо, чи є хоча б один фрейм
@@ -94,22 +176,30 @@ export const ProjectPage: React.FC<ProjectPageProps> = ({ onProjectSelect }) => 
 
       console.log('Початок створення проєкту...', { screens: layout.screens, screenData: layout.screenData });
 
-      // Зберігаємо структуру layout
-      const layoutInfo = {
-        screens: layout.screens,
-        screenFiles: layout.screenData.map((screen, index) => ({
-          screenNumber: index + 1,
-          xmlFileName: screen.xmlFile?.name || null,
-          framesCount: screen.framesFiles.length,
-        })),
-      };
-      localStorage.setItem('screenLayout', JSON.stringify(layoutInfo));
+      // Зберігаємо структуру layout тільки якщо проект прив'язаний до екрана
+      if (selectedScreen !== null) {
+        const layoutInfo = {
+          screens: layout.screens,
+          screenFiles: layout.screenData.map((screen, index) => ({
+            screenNumber: index + 1,
+            xmlFileName: screen.xmlFile?.name || null,
+            framesCount: screen.framesFiles.length,
+          })),
+        };
+        localStorage.setItem('screenLayout', JSON.stringify(layoutInfo));
+      }
 
       // Зберігаємо файли для кожного екрана та збираємо дані для проєкту
       const allFrames: string[] = [];
       const allAnnotations: { frames: { [key: string]: any[] } } = { frames: {} };
       let totalFileSize = 0;
-      let projectFileName = `ScreenLayout_${layout.screens}screens_${Date.now()}`;
+      // Створюємо id для проекту
+      const projectId = Date.now().toString();
+      
+      // Назва проекту: якщо вибрано екран - прив'язуємо до нього, інакше - просто id
+      let projectFileName = selectedScreen 
+        ? `Screen_${selectedScreen}_${projectId}`
+        : `Project_${projectId}`;
 
       // Обробляємо кожен екран
       for (let i = 0; i < layout.screenData.length; i++) {
@@ -205,8 +295,8 @@ export const ProjectPage: React.FC<ProjectPageProps> = ({ onProjectSelect }) => 
         return;
       }
 
-      // Створюємо проєкт
-      const videoId = createVideoId(projectFileName, totalFileSize);
+      // Створюємо проєкт (використовуємо projectId як id)
+      const videoId = projectId;
       const project: VideoProject = {
         id: videoId,
         fileName: projectFileName,
@@ -228,15 +318,152 @@ export const ProjectPage: React.FC<ProjectPageProps> = ({ onProjectSelect }) => 
       // Оновлюємо список проєктів
       await loadProjects();
       
+      // Оновлюємо screenLayout на основі зайнятих екранів (після оновлення списку проектів)
+      // Отримуємо актуальний список проектів з БД
+      const updatedProjectsList = await loadAllProjectsFromDB();
+      const updatedOccupancy: { [key: number]: { isOccupied: boolean; projectName?: string } } = {
+        1: { isOccupied: false },
+        2: { isOccupied: false },
+        3: { isOccupied: false },
+        4: { isOccupied: false },
+      };
+      
+      updatedProjectsList.forEach((project) => {
+        const screenMatch = project.fileName.match(/Screen_(\d+)_/);
+        if (screenMatch) {
+          const screenNum = parseInt(screenMatch[1]);
+          if (screenNum >= 1 && screenNum <= 4) {
+            updatedOccupancy[screenNum] = {
+              isOccupied: true,
+              projectName: project.fileName,
+            };
+          }
+        }
+      });
+      
+      const occupiedCount = Object.values(updatedOccupancy).filter(screen => screen.isOccupied).length;
+      const screensCount = Math.max(1, occupiedCount);
+      
+      const layoutData = localStorage.getItem('screenLayout');
+      let layoutInfo: any = { screens: screensCount, screenFiles: [] };
+      
+      if (layoutData) {
+        try {
+          layoutInfo = JSON.parse(layoutData);
+        } catch (error) {
+          console.error('Error parsing screenLayout:', error);
+        }
+      }
+      
+      layoutInfo.screens = screensCount;
+      layoutInfo.screenFiles = [];
+      for (let i = 1; i <= 4; i++) {
+        if (updatedOccupancy[i].isOccupied) {
+          const screenKey = `screen_${i}`;
+          const framesCount = parseInt(localStorage.getItem(`${screenKey}_frames_count`) || '0');
+          layoutInfo.screenFiles.push({
+            screenNumber: i,
+            xmlFileName: null,
+            framesCount: framesCount,
+          });
+        }
+      }
+      
+      localStorage.setItem('screenLayout', JSON.stringify(layoutInfo));
+      
       console.log('Проєкт успішно створено!');
       
-      // Автоматично відкриваємо створений проєкт для редагування
-      onProjectSelect(project);
-      
-      alert('Проєкт успішно створено та збережено! Відкриваємо для редагування...');
+      alert('Проєкт успішно створено та збережено!');
     } catch (error) {
       console.error('Помилка при збереженні проєкту:', error);
       alert(`Помилка при збереженні проєкту: ${error instanceof Error ? error.message : 'Невідома помилка'}. Перевірте консоль для деталей.`);
+    }
+  };
+
+  const handleAddProjectToScreen = (screenNumber: number, existingProject?: VideoProject) => {
+    if (existingProject) {
+      // Якщо проект вже існує, просто оновлюємо його назву для прив'язки до екрана
+      handleMoveProjectToScreen(existingProject, screenNumber);
+    } else {
+      // Якщо проект не існує, відкриваємо модальне вікно для створення нового
+      setSelectedScreen(screenNumber);
+      setIsLayoutModalOpen(true);
+    }
+  };
+
+  const handleMoveProjectToScreen = async (project: VideoProject, screenNumber: number) => {
+    try {
+      // Оновлюємо назву проекту для прив'язки до екрана (використовуємо id як номер)
+      // Якщо id містить підкреслення, беремо останню частину, інакше використовуємо весь id
+      const projectId = project.id.includes('_') ? project.id.split('_').pop() : project.id;
+      const updatedProject: VideoProject = {
+        ...project,
+        fileName: `Screen_${screenNumber}_${projectId}`,
+        updatedAt: Date.now(),
+      };
+
+      // Зберігаємо оновлений проект в БД
+      await saveProjectToDB(updatedProject);
+      
+      // Оновлюємо список проектів
+      await loadProjects();
+      
+      // Оновлюємо screenLayout на основі зайнятих екранів (після оновлення списку проектів)
+      const updatedProjectsList = await loadAllProjectsFromDB();
+      const updatedOccupancy: { [key: number]: { isOccupied: boolean; projectName?: string } } = {
+        1: { isOccupied: false },
+        2: { isOccupied: false },
+        3: { isOccupied: false },
+        4: { isOccupied: false },
+      };
+      
+      updatedProjectsList.forEach((proj) => {
+        const screenMatch = proj.fileName.match(/Screen_(\d+)_/);
+        if (screenMatch) {
+          const screenNum = parseInt(screenMatch[1]);
+          if (screenNum >= 1 && screenNum <= 4) {
+            updatedOccupancy[screenNum] = {
+              isOccupied: true,
+              projectName: proj.fileName,
+            };
+          }
+        }
+      });
+      
+      const occupiedCount = Object.values(updatedOccupancy).filter(screen => screen.isOccupied).length;
+      const screensCount = Math.max(1, occupiedCount);
+      
+      const layoutData = localStorage.getItem('screenLayout');
+      let layoutInfo: any = { screens: screensCount, screenFiles: [] };
+      
+      if (layoutData) {
+        try {
+          layoutInfo = JSON.parse(layoutData);
+        } catch (error) {
+          console.error('Error parsing screenLayout:', error);
+        }
+      }
+      
+      layoutInfo.screens = screensCount;
+      layoutInfo.screenFiles = [];
+      for (let i = 1; i <= 4; i++) {
+        if (updatedOccupancy[i].isOccupied) {
+          const screenKey = `screen_${i}`;
+          const framesCount = parseInt(localStorage.getItem(`${screenKey}_frames_count`) || '0');
+          layoutInfo.screenFiles.push({
+            screenNumber: i,
+            xmlFileName: null,
+            framesCount: framesCount,
+          });
+        }
+      }
+      
+      localStorage.setItem('screenLayout', JSON.stringify(layoutInfo));
+      
+      alert(`Проект "${project.fileName}" успішно перенесено на Екран ${screenNumber}`);
+    } catch (error) {
+      console.error('Помилка при перенесенні проекту:', error);
+      alert(`Помилка при перенесенні проекту: ${error instanceof Error ? error.message : 'Невідома помилка'}`);
     }
   };
 
@@ -248,8 +475,11 @@ export const ProjectPage: React.FC<ProjectPageProps> = ({ onProjectSelect }) => 
           <div className="project-count">{projectList.length} projects</div>
           <button
             className="add-layout-btn"
-            onClick={() => setIsLayoutModalOpen(true)}
-            title="Add Screen Layout"
+            onClick={() => {
+              setSelectedScreen(null);
+              setIsLayoutModalOpen(true);
+            }}
+            title="Add New Project"
           >
             +
           </button>
@@ -257,6 +487,26 @@ export const ProjectPage: React.FC<ProjectPageProps> = ({ onProjectSelect }) => 
       </div>
 
       <div className="project-content">
+        <div className="screens-panel">
+          <h3 className="screens-panel-title">Екрани</h3>
+          <div className="screens-list">
+            {[1, 2, 3, 4].map((screenNum) => {
+              const screenInfo = screenOccupancy[screenNum];
+              const isOccupied = screenInfo.isOccupied;
+              return (
+                <div key={screenNum} className={`screen-template ${isOccupied ? 'occupied' : 'free'}`}>
+                  <div className="screen-template-header">
+                    <span className="screen-template-number">Екран {screenNum}</span>
+                    <span className={`screen-status ${isOccupied ? 'occupied' : 'free'}`}>
+                      {isOccupied ? `Зайнятий: ${screenInfo.projectName || ''}` : 'Вільний'}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
         <div className="project-list">
           {projectList.length === 0 ? (
             <div className="empty-projects">
@@ -267,8 +517,7 @@ export const ProjectPage: React.FC<ProjectPageProps> = ({ onProjectSelect }) => 
             projectList.map((project) => (
               <div
                 key={project.id}
-                className={`project-card ${selectedProject?.id === project.id ? 'selected' : ''}`}
-                onClick={() => handleSelect(project)}
+                className="project-card"
               >
               <div className="project-card-header">
                 <div className="project-card-title">{project.fileName}</div>
@@ -284,14 +533,19 @@ export const ProjectPage: React.FC<ProjectPageProps> = ({ onProjectSelect }) => 
                     ✏
                   </button>
                   <button
-                    className="export-btn"
+                    className="add-to-screen-btn"
                     onClick={(e) => {
                       e.stopPropagation();
-                      handleExport(project);
+                      const freeScreen = getFirstFreeScreen();
+                      if (freeScreen) {
+                        handleAddProjectToScreen(freeScreen, project);
+                      } else {
+                        alert('Всі екрани зайняті. Спочатку видаліть проект з одного з екранів.');
+                      }
                     }}
-                    title="Export"
+                    title="Перенести на вільний екран"
                   >
-                    ⬇
+                    📺
                   </button>
                   <button
                     className="delete-btn"
@@ -328,80 +582,18 @@ export const ProjectPage: React.FC<ProjectPageProps> = ({ onProjectSelect }) => 
           )}
         </div>
 
-        {selectedProject && (
-          <div className="project-details">
-            <h3>Project Details</h3>
-            <div className="details-content">
-              <div className="detail-section">
-                <h4>File Information</h4>
-                <div className="detail-item">
-                  <span>Name:</span>
-                  <span>{selectedProject.fileName}</span>
-                </div>
-                <div className="detail-item">
-                  <span>Size:</span>
-                  <span>{formatFileSize(selectedProject.fileSize)}</span>
-                </div>
-                <div className="detail-item">
-                  <span>Type:</span>
-                  <span>{selectedProject.fileType}</span>
-                </div>
-                <div className="detail-item">
-                  <span>Created:</span>
-                  <span>{formatDate(selectedProject.createdAt)}</span>
-                </div>
-                <div className="detail-item">
-                  <span>Updated:</span>
-                  <span>{formatDate(selectedProject.updatedAt)}</span>
-                </div>
-              </div>
-
-              <div className="detail-section">
-                <h4>Annotation Statistics</h4>
-                <div className="detail-item">
-                  <span>Total Objects:</span>
-                  <span>{getTotalRectangles(selectedProject)}</span>
-                </div>
-                <div className="detail-item">
-                  <span>Frames with Annotations:</span>
-                  <span>
-                    {Object.keys(selectedProject.annotations.frames).filter(
-                      (key) => selectedProject.annotations.frames[key].length > 0
-                    ).length}
-                  </span>
-                </div>
-              </div>
-
-              <div className="detail-actions">
-                <button
-                  className="edit-detail-btn"
-                  onClick={() => onProjectSelect(selectedProject)}
-                >
-                  Edit
-                </button>
-                <button
-                  className="export-detail-btn"
-                  onClick={() => handleExport(selectedProject)}
-                >
-                  Export JSON
-                </button>
-                <button
-                  className="delete-detail-btn"
-                  onClick={() => handleDelete(selectedProject.id)}
-                >
-                  Delete Project
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
       <ScreenLayoutModal
         isOpen={isLayoutModalOpen}
-        onClose={() => setIsLayoutModalOpen(false)}
+        onClose={() => {
+          setIsLayoutModalOpen(false);
+          setSelectedScreen(null);
+        }}
         onSave={async (layout: { screens: number; screenData: ScreenData[] }) => {
           await handleLayoutSave(layout);
+          setSelectedScreen(null);
         }}
+        selectedScreen={selectedScreen}
       />
     </div>
   );

@@ -18,6 +18,7 @@ interface FrameViewerProps {
   screenLayout?: { screens: number } | null;
   xmlAnnotations?: { [screenNumber: number]: any } | null;
   currentScreenNumber?: number;
+  rectangleLabels?: { [index: number]: string }; // Назви об'єктів для відображення
 }
 
 export const FrameViewer: React.FC<FrameViewerProps> = ({
@@ -34,6 +35,7 @@ export const FrameViewer: React.FC<FrameViewerProps> = ({
   screenLayout = null,
   xmlAnnotations = null,
   currentScreenNumber = 1,
+  rectangleLabels = {},
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
@@ -225,6 +227,36 @@ export const FrameViewer: React.FC<FrameViewerProps> = ({
         ctx.lineTo(box.x, box.y + box.height);
         ctx.stroke();
       }
+      
+      // Малюємо назву об'єкта зверху боксу (для XML боксів використовуємо індекс)
+      const xmlLabel = `${currentScreenNumber}_${index + 1}`;
+      ctx.fillStyle = strokeColor;
+      ctx.font = '14px Arial';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      
+      // Вимірюємо текст для створення фону
+      const textMetrics = ctx.measureText(xmlLabel);
+      const textWidth = textMetrics.width;
+      const textHeight = 18;
+      const padding = 4;
+      
+      // Малюємо напівпрозорий фон для тексту
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+      ctx.fillRect(
+        box.x,
+        box.y - textHeight - padding,
+        textWidth + padding * 2,
+        textHeight
+      );
+      
+      // Малюємо текст
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(
+        xmlLabel,
+        box.x + padding,
+        box.y - textHeight - padding + 2
+      );
     });
   };
 
@@ -270,6 +302,38 @@ export const FrameViewer: React.FC<FrameViewerProps> = ({
         ctx.moveTo(rect.x + rect.w, rect.y);
         ctx.lineTo(rect.x, rect.y + rect.h);
         ctx.stroke();
+      }
+
+      // Малюємо назву об'єкта зверху боксу
+      const label = rectangleLabels[index];
+      if (label) {
+        ctx.fillStyle = strokeColor; // Використовуємо колір боксу для фону тексту
+        ctx.font = '14px Arial';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        
+        // Вимірюємо текст для створення фону
+        const textMetrics = ctx.measureText(label);
+        const textWidth = textMetrics.width;
+        const textHeight = 18;
+        const padding = 4;
+        
+        // Малюємо напівпрозорий фон для тексту
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(
+          rect.x,
+          rect.y - textHeight - padding,
+          textWidth + padding * 2,
+          textHeight
+        );
+        
+        // Малюємо текст
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(
+          label,
+          rect.x + padding,
+          rect.y - textHeight - padding + 2
+        );
       }
 
       // Ручки для зміни розміру не малюються для hold та attack

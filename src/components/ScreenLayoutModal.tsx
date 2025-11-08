@@ -10,30 +10,37 @@ interface ScreenLayoutModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: (layout: { screens: number; screenData: ScreenData[] }) => Promise<void> | void;
+  selectedScreen?: number | null;
 }
 
 export const ScreenLayoutModal: React.FC<ScreenLayoutModalProps> = ({
   isOpen,
   onClose,
   onSave,
+  selectedScreen = null,
 }) => {
-  const [screens, setScreens] = useState<number>(1);
+  // Завжди 4 екрани
+  const screens = 4;
   const [screenData, setScreenData] = useState<ScreenData[]>([
+    { xmlFile: null, framesFiles: [] },
+    { xmlFile: null, framesFiles: [] },
+    { xmlFile: null, framesFiles: [] },
     { xmlFile: null, framesFiles: [] },
   ]);
   const xmlInputRefs = useRef<(HTMLInputElement | null)[]>([]);
   const framesInputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
-  // Оновлюємо screenData при зміні кількості екранів
+  // Оновлюємо screenData при відкритті модального вікна
   React.useEffect(() => {
-    setScreenData(prev => {
-      const newScreenData: ScreenData[] = [];
-      for (let i = 0; i < screens; i++) {
-        newScreenData.push(prev[i] || { xmlFile: null, framesFiles: [] });
-      }
-      return newScreenData;
-    });
-  }, [screens]);
+    if (isOpen) {
+      setScreenData([
+        { xmlFile: null, framesFiles: [] },
+        { xmlFile: null, framesFiles: [] },
+        { xmlFile: null, framesFiles: [] },
+        { xmlFile: null, framesFiles: [] },
+      ]);
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -63,12 +70,28 @@ export const ScreenLayoutModal: React.FC<ScreenLayoutModalProps> = ({
       return;
     }
 
+    // Якщо вибрано конкретний екран, зберігаємо тільки його дані
+    let dataToSave: ScreenData[] = screenData;
+    if (selectedScreen !== null) {
+      dataToSave = [
+        { xmlFile: null, framesFiles: [] },
+        { xmlFile: null, framesFiles: [] },
+        { xmlFile: null, framesFiles: [] },
+        { xmlFile: null, framesFiles: [] },
+      ];
+      dataToSave[selectedScreen - 1] = screenData[selectedScreen - 1];
+    }
+
     // Викликаємо onSave (який є асинхронним)
-    await onSave({ screens, screenData });
+    await onSave({ screens, screenData: dataToSave });
     
     // Очищаємо форму та закриваємо модальне вікно
-    setScreens(1);
-    setScreenData([{ xmlFile: null, framesFiles: [] }]);
+    setScreenData([
+      { xmlFile: null, framesFiles: [] },
+      { xmlFile: null, framesFiles: [] },
+      { xmlFile: null, framesFiles: [] },
+      { xmlFile: null, framesFiles: [] },
+    ]);
     onClose();
   };
 
@@ -81,93 +104,132 @@ export const ScreenLayoutModal: React.FC<ScreenLayoutModalProps> = ({
         </div>
         
         <div className="screen-layout-modal-content">
-          <div className="layout-section">
-            <h3>Number of Screens</h3>
-            <div className="screen-options">
-              {[1, 2, 3, 4].map((num) => (
+          {selectedScreen === null ? (
+            // При створенні нового проекту - тільки поля завантаження
+            <div className="file-upload-section">
+              <div className="upload-item">
+                <label>XML File:</label>
+                <input
+                  ref={(el) => (xmlInputRefs.current[0] = el)}
+                  type="file"
+                  accept=".xml,application/xml,text/xml"
+                  onChange={(e) => handleXmlUpload(0, e)}
+                  style={{ display: 'none' }}
+                />
                 <button
-                  key={num}
-                  className={`screen-option ${screens === num ? 'active' : ''}`}
-                  onClick={() => setScreens(num)}
+                  className="upload-btn"
+                  onClick={() => xmlInputRefs.current[0]?.click()}
                 >
-                  {num}
+                  {screenData[0]?.xmlFile ? screenData[0].xmlFile.name : 'Select XML'}
                 </button>
-              ))}
+              </div>
+              <div className="upload-item">
+                <label>Frames (Images):</label>
+                <input
+                  ref={(el) => (framesInputRefs.current[0] = el)}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={(e) => handleFramesUpload(0, e)}
+                  style={{ display: 'none' }}
+                />
+                <button
+                  className="upload-btn"
+                  onClick={() => framesInputRefs.current[0]?.click()}
+                >
+                  {screenData[0]?.framesFiles.length > 0 
+                    ? `${screenData[0].framesFiles.length} frame(s) selected`
+                    : 'Select Frames'}
+                </button>
+              </div>
             </div>
-          </div>
+          ) : (
+            // При додаванні на конкретний екран
+            <>
+              <div className="selected-screen-info">
+                <h3>Додавання проекту на Екран {selectedScreen}</h3>
+                <p className="info-text">Завантажте файли для екрана {selectedScreen}</p>
+              </div>
 
-          <div className="layout-preview">
-            <h3>Preview</h3>
-            <div className="preview-container">
-              {Array.from({ length: screens }).map((_, index) => {
-                const cols = screens === 1 ? 1 : screens === 2 ? 2 : screens === 3 ? 2 : 2;
-                const rows = screens === 1 ? 1 : screens === 2 ? 1 : screens === 3 ? 2 : 2;
-                const col = index % cols;
-                const row = Math.floor(index / cols);
-                const width = 100 / cols;
-                const height = 100 / rows;
-                
-                return (
-                  <div
-                    key={index}
-                    className="preview-screen"
-                    style={{
-                      width: `${width}%`,
-                      height: `${height}%`,
-                      left: `${col * width}%`,
-                      top: `${row * height}%`,
-                    }}
-                  >
-                    Screen {index + 1}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="file-upload-section">
-            <h3>Upload Files for Each Screen</h3>
-            {Array.from({ length: screens }).map((_, index) => (
-              <div key={index} className="screen-upload-group">
-                <h4>Screen {index + 1}</h4>
-                <div className="upload-item">
-                  <label>XML File:</label>
-                  <input
-                    ref={(el) => (xmlInputRefs.current[index] = el)}
-                    type="file"
-                    accept=".xml,application/xml,text/xml"
-                    onChange={(e) => handleXmlUpload(index, e)}
-                    style={{ display: 'none' }}
-                  />
-                  <button
-                    className="upload-btn"
-                    onClick={() => xmlInputRefs.current[index]?.click()}
-                  >
-                    {screenData[index]?.xmlFile ? screenData[index].xmlFile.name : 'Select XML'}
-                  </button>
-                </div>
-                <div className="upload-item">
-                  <label>Frames (Images):</label>
-                  <input
-                    ref={(el) => (framesInputRefs.current[index] = el)}
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    onChange={(e) => handleFramesUpload(index, e)}
-                    style={{ display: 'none' }}
-                  />
-                  <button
-                    className="upload-btn"
-                    onClick={() => framesInputRefs.current[index]?.click()}
-                  >
-                    {screenData[index]?.framesFiles.length > 0 
-                      ? `${screenData[index].framesFiles.length} frame(s) selected`
-                      : 'Select Frames'}
-                  </button>
+              <div className="layout-preview">
+                <h3>Preview</h3>
+                <div className="preview-container">
+                  {Array.from({ length: screens }).map((_, index) => {
+                    const cols = screens === 1 ? 1 : screens === 2 ? 2 : screens === 3 ? 2 : 2;
+                    const rows = screens === 1 ? 1 : screens === 2 ? 1 : screens === 3 ? 2 : 2;
+                    const col = index % cols;
+                    const row = Math.floor(index / cols);
+                    const width = 100 / cols;
+                    const height = 100 / rows;
+                    
+                    return (
+                      <div
+                        key={index}
+                        className="preview-screen"
+                        style={{
+                          width: `${width}%`,
+                          height: `${height}%`,
+                          left: `${col * width}%`,
+                          top: `${row * height}%`,
+                        }}
+                      >
+                        Screen {index + 1}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
-            ))}
-          </div>
+
+              <div className="file-upload-section">
+                <h3>Upload Files</h3>
+                {Array.from({ length: screens }).map((_, index) => {
+                  if (index + 1 !== selectedScreen) {
+                    return null;
+                  }
+                  return (
+                    <div key={index} className="screen-upload-group">
+                      <h4>Screen {index + 1}</h4>
+                      <div className="upload-item">
+                        <label>XML File:</label>
+                        <input
+                          ref={(el) => (xmlInputRefs.current[index] = el)}
+                          type="file"
+                          accept=".xml,application/xml,text/xml"
+                          onChange={(e) => handleXmlUpload(index, e)}
+                          style={{ display: 'none' }}
+                        />
+                        <button
+                          className="upload-btn"
+                          onClick={() => xmlInputRefs.current[index]?.click()}
+                        >
+                          {screenData[index]?.xmlFile ? screenData[index].xmlFile.name : 'Select XML'}
+                        </button>
+                      </div>
+                      <div className="upload-item">
+                        <label>Frames (Images):</label>
+                        <input
+                          ref={(el) => (framesInputRefs.current[index] = el)}
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          onChange={(e) => handleFramesUpload(index, e)}
+                          style={{ display: 'none' }}
+                        />
+                        <button
+                          className="upload-btn"
+                          onClick={() => framesInputRefs.current[index]?.click()}
+                        >
+                          {screenData[index]?.framesFiles.length > 0 
+                            ? `${screenData[index].framesFiles.length} frame(s) selected`
+                            : 'Select Frames'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
         </div>
 
         <div className="screen-layout-modal-footer">
