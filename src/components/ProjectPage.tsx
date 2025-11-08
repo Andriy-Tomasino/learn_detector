@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { exportProject, type VideoProject } from '../utils/storage';
 import { loadAllProjectsFromDB, deleteProjectFromDB, getProjectFile } from '../utils/database';
+import { ScreenLayoutModal } from './ScreenLayoutModal';
 import './ProjectPage.css';
 
 interface ProjectPageProps {
@@ -10,6 +11,7 @@ interface ProjectPageProps {
 export const ProjectPage: React.FC<ProjectPageProps> = ({ onProjectSelect }) => {
   const [projects, setProjects] = useState<{ [key: string]: VideoProject }>({});
   const [selectedProject, setSelectedProject] = useState<VideoProject | null>(null);
+  const [isLayoutModalOpen, setIsLayoutModalOpen] = useState(false);
 
   useEffect(() => {
     loadProjects();
@@ -72,11 +74,55 @@ export const ProjectPage: React.FC<ProjectPageProps> = ({ onProjectSelect }) => 
 
   const projectList = Object.values(projects);
 
+  const handleLayoutSave = async (layout: { screens: number; screenData: Array<{ videoFile: File | null; jsonFile: File | null }> }) => {
+    // Зберігаємо структуру layout
+    const layoutInfo = {
+      screens: layout.screens,
+      screenFiles: layout.screenData.map((screen, index) => ({
+        screenNumber: index + 1,
+        videoFileName: screen.videoFile?.name || null,
+        jsonFileName: screen.jsonFile?.name || null,
+      })),
+    };
+    localStorage.setItem('screenLayout', JSON.stringify(layoutInfo));
+
+    // Зберігаємо файли для кожного екрана
+    for (let i = 0; i < layout.screenData.length; i++) {
+      const screen = layout.screenData[i];
+      const screenKey = `screen_${i + 1}`;
+
+      if (screen.videoFile) {
+        const reader = new FileReader();
+        reader.onload = () => {
+          localStorage.setItem(`${screenKey}_video`, reader.result as string);
+        };
+        reader.readAsDataURL(screen.videoFile);
+      }
+
+      if (screen.jsonFile) {
+        const reader = new FileReader();
+        reader.onload = () => {
+          localStorage.setItem(`${screenKey}_json`, reader.result as string);
+        };
+        reader.readAsText(screen.jsonFile);
+      }
+    }
+  };
+
   return (
     <div className="project-page">
       <div className="project-header">
         <h2>All Projects</h2>
-        <div className="project-count">{projectList.length} projects</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <div className="project-count">{projectList.length} projects</div>
+          <button
+            className="add-layout-btn"
+            onClick={() => setIsLayoutModalOpen(true)}
+            title="Add Screen Layout"
+          >
+            +
+          </button>
+        </div>
       </div>
 
       <div className="project-content">
@@ -219,6 +265,11 @@ export const ProjectPage: React.FC<ProjectPageProps> = ({ onProjectSelect }) => 
           </div>
         )}
       </div>
+      <ScreenLayoutModal
+        isOpen={isLayoutModalOpen}
+        onClose={() => setIsLayoutModalOpen(false)}
+        onSave={handleLayoutSave}
+      />
     </div>
   );
 };

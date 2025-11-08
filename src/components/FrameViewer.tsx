@@ -14,6 +14,8 @@ interface FrameViewerProps {
   onCreationModeChange?: (mode: CreationMode) => void;
   selectedRectIndex: number | null;
   onRectSelect: (index: number | null) => void;
+  isDetecting?: boolean;
+  screenLayout?: { screens: number } | null;
 }
 
 export const FrameViewer: React.FC<FrameViewerProps> = ({
@@ -26,6 +28,8 @@ export const FrameViewer: React.FC<FrameViewerProps> = ({
   onCreationModeChange,
   selectedRectIndex,
   onRectSelect,
+  isDetecting = false,
+  screenLayout = null,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
@@ -132,6 +136,51 @@ export const FrameViewer: React.FC<FrameViewerProps> = ({
     }
   };
 
+  const drawScreenLayout = (ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number) => {
+    if (!screenLayout || !isDetecting) return;
+    
+    const screens = screenLayout.screens;
+    if (screens === 0) return;
+
+    ctx.strokeStyle = '#4caf50';
+    ctx.lineWidth = 3;
+    ctx.setLineDash([10, 5]);
+
+    if (screens === 1) {
+      // Один екран - без розділення
+      return;
+    } else if (screens === 2) {
+      // Два екрани - вертикальне розділення
+      const midX = canvasWidth / 2;
+      ctx.beginPath();
+      ctx.moveTo(midX, 0);
+      ctx.lineTo(midX, canvasHeight);
+      ctx.stroke();
+    } else if (screens === 3) {
+      // Три екрани - 2x2 з одним порожнім
+      const midX = canvasWidth / 2;
+      const midY = canvasHeight / 2;
+      ctx.beginPath();
+      ctx.moveTo(midX, 0);
+      ctx.lineTo(midX, canvasHeight);
+      ctx.moveTo(0, midY);
+      ctx.lineTo(midX, midY);
+      ctx.stroke();
+    } else if (screens === 4) {
+      // Чотири екрани - 2x2
+      const midX = canvasWidth / 2;
+      const midY = canvasHeight / 2;
+      ctx.beginPath();
+      ctx.moveTo(midX, 0);
+      ctx.lineTo(midX, canvasHeight);
+      ctx.moveTo(0, midY);
+      ctx.lineTo(canvasWidth, midY);
+      ctx.stroke();
+    }
+
+    ctx.setLineDash([]);
+  };
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -145,7 +194,10 @@ export const FrameViewer: React.FC<FrameViewerProps> = ({
     if (points.length > 0 || hoverPoint) {
       drawPoints(ctx, points, hoverPoint);
     }
-  }, [rectangles, points, hoverPoint, selectedRectIndex]);
+    if (isDetecting && screenLayout) {
+      drawScreenLayout(ctx, canvas.width, canvas.height);
+    }
+  }, [rectangles, points, hoverPoint, selectedRectIndex, isDetecting, screenLayout]);
 
   // Слухаємо події від RectangleTool
   useEffect(() => {

@@ -23,6 +23,20 @@ cd video-annotation
 npm install
 ```
 
+## Налаштування
+
+Створіть файл `.env` в корені проєкту (можна скопіювати з `.env.example`):
+
+```bash
+cp .env.example .env
+```
+
+Встановіть URL вашого бекенду:
+
+```
+VITE_API_BASE_URL=http://localhost:8000
+```
+
 ## Запуск
 
 ```bash
@@ -30,6 +44,13 @@ npm run dev
 ```
 
 Відкрийте браузер на адресі, яку покаже Vite (зазвичай http://localhost:5173).
+
+## API Endpoints
+
+Компонент `DroneDetector` очікує наступні endpoints на бекенді:
+
+- `GET /api/videos/{videoId}` - отримання відео файлу
+- `GET /api/detections/{videoId}` - отримання JSON з детекціями (bounding boxes)
 
 ## Використання
 

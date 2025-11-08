@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { FrameViewer } from './FrameViewer';
 import { ObjectsList } from './ObjectsList';
-import { CreateTaskModal } from './CreateTaskModal';
+import { DetectionPanel } from './DetectionPanel';
 import {
   saveCurrentTask,
   loadCurrentTask,
@@ -35,8 +35,28 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
   const [currentVideoId, setCurrentVideoId] = useState<string | null>(null);
   const [currentVideoInfo, setCurrentVideoInfo] = useState<{ fileName: string; fileSize: number; fileType: string } | null>(null);
   const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
-  const [isCreateTaskModalOpen, setIsCreateTaskModalOpen] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isDetecting, setIsDetecting] = useState(false);
+  const [screenLayout, setScreenLayout] = useState<{ screens: number } | null>(null);
+  const [detections, setDetections] = useState<Array<{ screenNumber: number; numberOnScreen: number; id: string; status?: 'focused' | 'reject' | null }>>([
+    // Приклад даних для тестування
+    { screenNumber: 1, numberOnScreen: 1, id: 'det_001', status: null },
+    { screenNumber: 1, numberOnScreen: 2, id: 'det_002', status: null },
+    { screenNumber: 2, numberOnScreen: 1, id: 'det_003', status: null },
+    { screenNumber: 2, numberOnScreen: 2, id: 'det_004', status: null },
+  ]);
+
+  // Завантаження розмітки екранів
+  useEffect(() => {
+    const layoutData = localStorage.getItem('screenLayout');
+    if (layoutData) {
+      try {
+        const layout = JSON.parse(layoutData);
+        setScreenLayout({ screens: layout.screens });
+      } catch (error) {
+        console.error('Error loading screen layout:', error);
+      }
+    }
+  }, []);
 
   // Завантаження проекту для редагування
   useEffect(() => {
@@ -194,19 +214,6 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
     }
   };
 
-  const handlePreviousFrame = () => {
-    if (currentFrameIndex > 0) {
-      setCurrentFrameIndex(currentFrameIndex - 1);
-      setSelectedRectIndex(null);
-    }
-  };
-
-  const handleNextFrame = () => {
-    if (currentFrameIndex < frames.length - 1) {
-      setCurrentFrameIndex(currentFrameIndex + 1);
-      setSelectedRectIndex(null);
-    }
-  };
 
   const handleRectanglesChange = (rectangles: Rectangle[]) => {
     const frameKey = currentFrameIndex.toString();
@@ -310,53 +317,45 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
   const currentFrame = frames[currentFrameIndex];
   const currentRectangles = annotations.frames[currentFrameIndex.toString()] || [];
 
+  const handleStatusChange = (id: string, status: 'focused' | 'reject' | null) => {
+    setDetections(prev => 
+      prev.map(det => det.id === id ? { ...det, status } : det)
+    );
+  };
+
   return (
     <div className="task-page">
-      <div className="task-toolbar">
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="video/*,image/*"
-          onChange={handleFileUpload}
-          style={{ display: 'none' }}
-        />
-        <button onClick={() => setIsCreateTaskModalOpen(true)}>
-          Create New Task
-        </button>
-        <button onClick={() => fileInputRef.current?.click()}>
-          Add Video/Photo
-        </button>
-        <button onClick={handleSave} disabled={!currentVideoId || frames.length === 0}>
-          Save
-        </button>
-        <div className="creation-mode-panel">
-          <span>Creation Mode:</span>
-          <button
-            className={creationMode === 'drag' ? 'active' : ''}
-            onClick={() => setCreationMode('drag')}
-            disabled={frames.length === 0}
-          >
-            Drag
-          </button>
-          <button
-            className={creationMode === '2points' ? 'active' : ''}
-            onClick={() => setCreationMode('2points')}
-            disabled={frames.length === 0}
-          >
-            2 Points
-          </button>
-          <button
-            className={creationMode === '4points' ? 'active' : ''}
-            onClick={() => setCreationMode('4points')}
-            disabled={frames.length === 0}
-          >
-            4 Points
-          </button>
-        </div>
-      </div>
-
       <div className="main-area">
-        <div className="canvas-wrapper">
+        <div className="canvas-wrapper" style={{ position: 'relative' }}>
+          <button
+            onClick={() => setIsDetecting(!isDetecting)}
+            style={{
+              position: 'absolute',
+              top: '20px',
+              right: '20px',
+              padding: '12px 24px',
+              border: 'none',
+              borderRadius: '8px',
+              fontSize: '14px',
+              fontWeight: '600',
+              cursor: 'pointer',
+              backgroundColor: isDetecting ? '#f44336' : '#4caf50',
+              color: '#ffffff',
+              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+              transition: 'all 0.3s ease',
+              zIndex: 10,
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.transform = 'translateY(-2px)';
+              e.currentTarget.style.boxShadow = '0 6px 16px rgba(0, 0, 0, 0.4)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.transform = 'translateY(0)';
+              e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.3)';
+            }}
+          >
+            {isDetecting ? 'Stop Detecting' : 'Detecting'}
+          </button>
           {currentFrame ? (
             <FrameViewer
               frameImage={currentFrame.imageData}
@@ -368,6 +367,8 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
               onCreationModeChange={setCreationMode}
               selectedRectIndex={selectedRectIndex}
               onRectSelect={setSelectedRectIndex}
+              isDetecting={isDetecting}
+              screenLayout={screenLayout}
             />
           ) : (
             <div style={{ color: '#fff', textAlign: 'center' }}>
@@ -384,29 +385,9 @@ export const TaskPage: React.FC<TaskPageProps> = ({ projectToEdit, onEditComplet
           />
         )}
       </div>
-
-      <div className="bottom-panel">
-        <button
-          onClick={handlePreviousFrame}
-          disabled={currentFrameIndex === 0 || frames.length === 0}
-        >
-          &lt;
-        </button>
-        <div className="frame-info">
-          Frame: {frames.length > 0 ? `${currentFrameIndex + 1}/${frames.length}` : '0/0'}
-        </div>
-        <button
-          onClick={handleNextFrame}
-          disabled={currentFrameIndex >= frames.length - 1 || frames.length === 0}
-        >
-          &gt;
-        </button>
-      </div>
-
-      <CreateTaskModal
-        isOpen={isCreateTaskModalOpen}
-        onClose={() => setIsCreateTaskModalOpen(false)}
-        onCreate={handleCreateTask}
+      <DetectionPanel
+        detections={detections}
+        onStatusChange={handleStatusChange}
       />
     </div>
   );
